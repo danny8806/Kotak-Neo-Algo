@@ -1,0 +1,5 @@
+flask
+pandas
+pyotp
+python-dotenv
+git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.1#egg=neo_api_client

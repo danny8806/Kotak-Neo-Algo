@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kotak Algo Web Terminal</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">KA</span>
+        <div>
+          <h1>Kotak Algo</h1>
+          <p>Web trading terminal</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Market Scope</h2>
+        <label>Expiry
+          <select id="expirySelect"></select>
+        </label>
+        <label>Reference Spot
+          <input id="spotInput" type="number" step="50">
+        </label>
+        <button id="refreshDashboardBtn" class="primary">Refresh Board</button>
+        <button id="liveSpotBtn">Use Live NIFTY</button>
+      </section>
+
+      <section class="panel">
+        <h2>Broker Control</h2>
+        <p class="muted">1. Check credentials, 2. generate or paste TOTP, 3. connect, 4. refresh account.</p>
+        <div class="status-row">
+          <span>SDK</span>
+          <strong id="sdkStatus">Checking</strong>
+        </div>
+        <div class="status-row">
+          <span>Broker</span>
+          <strong id="brokerStatus">Disconnected</strong>
+        </div>
+        <label>Environment
+          <select id="environmentInput">
+            <option value="prod">prod</option>
+            <option value="uat">uat</option>
+          </select>
+        </label>
+        <label>Consumer Key
+          <input id="consumerKeyInput" type="password" autocomplete="off" placeholder="Consumer key">
+        </label>
+        <label>Mobile Number
+          <input id="mobileInput" type="text" autocomplete="tel" placeholder="+91...">
+        </label>
+        <label>UCC
+          <input id="uccInput" type="text" autocomplete="username" placeholder="Client code">
+        </label>
+        <label>MPIN
+          <input id="mpinInput" type="password" autocomplete="current-password" placeholder="MPIN">
+        </label>
+        <label>TOTP
+          <input id="totpInput" type="text" autocomplete="one-time-code" placeholder="Enter current TOTP or use Generate">
+        </label>
+        <label>TOTP Secret
+          <input id="totpSecretInput" type="password" autocomplete="off" placeholder="Optional authenticator secret">
+        </label>
+        <div class="button-row">
+          <button id="diagnosticsBtn">Test</button>
+          <button id="totpBtn">Generate TOTP</button>
+          <button id="loginBtn" class="primary">Connect</button>
+          <button id="logoutBtn">Logout</button>
+        </div>
+        <div id="connectionChecklist" class="stack checklist"></div>
+        <div id="brokerMessage" class="stack"></div>
+        <div id="diagnosticsPanel" class="stack"></div>
+        <div id="envStatus" class="env-grid"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Actions</h2>
+        <label>Execution Mode
+          <select id="executionMode">
+            <option value="Paper">Paper</option>
+            <option value="Live">Live</option>
+          </select>
+        </label>
+        <label>Strategy Lots
+          <input id="strategyLots" type="number" min="1" value="1">
+        </label>
+        <button id="watchlistQuotesBtn">Fetch Watchlist Quotes</button>
+        <button id="accountSnapshotBtn">Refresh Account</button>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Interactive Trading Website</p>
+          <h2>Trade, monitor, and stage option structures from a real browser app</h2>
+          <p id="heroSummary" class="muted">Loading market structure...</p>
+        </div>
+        <div class="hero-actions">
+          <button data-tab-target="overview" class="tab-button active">Overview</button>
+          <button data-tab-target="signals" class="tab-button">Signals</button>
+          <button data-tab-target="market" class="tab-button">Market Watch</button>
+          <button data-tab-target="strategies" class="tab-button">Strategies</button>
+          <button data-tab-target="trade" class="tab-button">Trade Terminal</button>
+          <button data-tab-target="portfolio" class="tab-button">Portfolio</button>
+        </div>
+      </header>
+
+      <section class="tab active" id="tab-overview">
+        <div class="metrics-grid" id="metricsGrid"></div>
+        <div class="content-grid">
+          <section class="panel wide">
+            <div class="panel-head">
+              <h3>Open Interest Landscape</h3>
+              <span id="signalBadge" class="pill">Range</span>
+            </div>
+            <div id="oiChart" class="chart-surface"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Signal Score</h3>
+            </div>
+            <div id="signalMeter" class="signal-meter"></div>
+            <div id="supportResistanceCard" class="stack"></div>
+          </section>
+        </div>
+        <div class="content-grid">
+          <section class="panel">
+            <h3>PE Support Ladder</h3>
+            <div id="peSupports"></div>
+          </section>
+          <section class="panel">
+            <h3>CE Resistance Ladder</h3>
+            <div id="ceResistances"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-signals">
+        <div id="signalCards" class="signal-cards"></div>
+        <div class="content-grid">
+          <section class="panel wide">
+            <div class="panel-head">
+              <h3>Best Execution Candidates</h3>
+            </div>
+            <div id="ideasTable"></div>
+          </section>
+          <section class="panel">
+            <h3>Alert Center</h3>
+            <div id="alertsList" class="stack"></div>
+            <form id="alertForm" class="stack compact">
+              <input name="name" type="text" placeholder="Alert name" required>
+              <select name="metric">
+                <option value="spot">Spot</option>
+                <option value="total_pcr">Total PCR</option>
+                <option value="atm_pcr">ATM PCR</option>
+                <option value="max_pain_gap_pct">Max pain gap %</option>
+                <option value="support">Support</option>
+                <option value="resistance">Resistance</option>
+              </select>
+              <select name="operator">
+                <option value=">=">>=</option>
+                <option value="<="><=</option>
+              </select>
+              <input name="threshold" type="number" step="0.01" placeholder="Threshold" required>
+              <button class="primary" type="submit">Arm Alert</button>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-market">
+        <div class="content-grid">
+          <section class="panel wide">
+            <div class="panel-head">
+              <h3>Focus Watchlist</h3>
+              <button id="watchlistRefreshInlineBtn">Refresh Quotes</button>
+            </div>
+            <div id="watchlistTable"></div>
+          </section>
+          <section class="panel">
+            <h3>Quote Feed</h3>
+            <div id="quoteFeed" class="stack"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-strategies">
+        <div class="content-grid">
+          <section class="panel">
+            <h3>Strategy Catalog</h3>
+            <label>Outlook
+              <select id="strategyOutlookFilter"></select>
+            </label>
+            <label>Strategy
+              <select id="strategySelect"></select>
+            </label>
+            <button id="stageStrategyBtn" class="primary">Stage Strategy</button>
+            <div id="strategyDetail" class="stack"></div>
+          </section>
+          <section class="panel wide">
+            <div class="panel-head">
+              <h3>Payoff Curve</h3>
+            </div>
+            <svg id="payoffChart" class="svg-chart" viewBox="0 0 800 320" preserveAspectRatio="none"></svg>
+            <div id="strategyLegs"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-trade">
+        <div class="content-grid">
+          <section class="panel">
+            <h3>Single Order Ticket</h3>
+            <form id="orderForm" class="stack compact">
+              <label>Symbol
+                <select name="symbol" id="orderSymbol"></select>
+              </label>
+              <label>Side
+                <select name="transaction_type">
+                  <option value="B">Buy</option>
+                  <option value="S">Sell</option>
+                </select>
+              </label>
+              <label>Order Type
+                <select name="order_type">
+                  <option value="L">Limit</option>
+                  <option value="MKT">Market</option>
+                  <option value="SL">Stop Loss</option>
+                  <option value="SL-M">Stop Loss Market</option>
+                </select>
+              </label>
+              <label>Lots
+                <input name="lots" type="number" min="1" value="1">
+              </label>
+              <label>Product
+                <select name="product">
+                  <option value="MIS">MIS</option>
+                  <option value="NRML">NRML</option>
+                  <option value="BO">BO</option>
+                </select>
+              </label>
+              <label>Price
+                <input name="price" type="number" step="0.05" value="0">
+              </label>
+              <label>Trigger Price
+                <input name="trigger_price" type="number" step="0.05" value="0">
+              </label>
+              <label>AMO
+                <select name="amo">
+                  <option value="NO">NO</option>
+                  <option value="YES">YES</option>
+                </select>
+              </label>
+              <label class="checkbox">
+                <input id="liveOrderConfirm" type="checkbox">
+                Confirm live single-leg order
+              </label>
+              <div class="button-row">
+                <button type="button" id="marginCheckBtn">Margin</button>
+                <button type="submit" class="primary">Send Order</button>
+              </div>
+            </form>
+            <pre id="orderPayloadPreview" class="code-block"></pre>
+          </section>
+
+          <section class="panel">
+            <h3>Modify / Cancel</h3>
+            <form id="modifyForm" class="stack compact">
+              <input name="order_id" type="text" placeholder="Order ID" required>
+              <input name="price" type="number" step="0.05" placeholder="New price" required>
+              <select name="order_type">
+                <option value="L">Limit</option>
+                <option value="MKT">Market</option>
+                <option value="SL">Stop Loss</option>
+                <option value="SL-M">Stop Loss Market</option>
+              </select>
+              <input name="quantity" type="number" min="1" placeholder="Quantity" required>
+              <input name="trigger_price" type="number" step="0.05" placeholder="Trigger price" value="0">
+              <button type="submit">Modify Order</button>
+            </form>
+            <form id="cancelForm" class="stack compact">
+              <input name="order_id" type="text" placeholder="Order ID" required>
+              <button type="submit">Cancel Order</button>
+            </form>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Staged Basket</h3>
+            <div class="button-row">
+              <button id="clearStagedBtn">Clear</button>
+              <button id="executeStagedBtn" class="primary">Execute Basket</button>
+            </div>
+          </div>
+          <div id="stagedBasket"></div>
+        </section>
+      </section>
+
+      <section class="tab" id="tab-portfolio">
+        <div class="content-grid">
+          <section class="panel wide">
+            <h3>Account Snapshot</h3>
+            <div id="accountSnapshot" class="stack"></div>
+          </section>
+          <section class="panel">
+            <h3>Scrip Search</h3>
+            <form id="searchForm" class="stack compact">
+              <input name="symbol" type="text" placeholder="Symbol" value="nifty" required>
+              <input name="expiry" type="text" placeholder="Expiry YYYYMM">
+              <select name="option_type">
+                <option value="">Any option type</option>
+                <option value="CE">CE</option>
+                <option value="PE">PE</option>
+              </select>
+              <input name="strike_price" type="text" placeholder="Strike price">
+              <button type="submit">Search Scrip</button>
+            </form>
+            <div id="searchResults"></div>
+          </section>
+        </div>
+      </section>
+
+      <div id="toast" class="toast hidden"></div>
+    </main>
+  </div>
+
+  <script>
+    window.__INITIAL__ = {
+      dataFile: {{ data_file|tojson }}
+    };
+  </script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
