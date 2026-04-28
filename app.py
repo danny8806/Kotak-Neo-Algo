@@ -64,6 +64,38 @@ def api_logout():
     return jsonify(platform.logout_broker())
 
 
+@app.get("/api/setups")
+def api_setups():
+    return json_ok(saved_setups=platform.saved_setup_summaries(), active_setup_name=platform.state.active_setup_name)
+
+
+@app.post("/api/setups")
+def api_save_setup():
+    body = request.get_json(silent=True) or {}
+    result = platform.save_setup(name=body.get("name") or "", overrides=body)
+    if result["status"] != "ok":
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.post("/api/setups/use")
+def api_use_setup():
+    body = request.get_json(silent=True) or {}
+    result = platform.use_setup(name=body.get("name") or "")
+    if result["status"] != "ok":
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.post("/api/setups/delete")
+def api_delete_setup():
+    body = request.get_json(silent=True) or {}
+    result = platform.delete_setup(name=body.get("name") or "")
+    if result["status"] != "ok":
+        return jsonify(result), 400
+    return jsonify(result)
+
+
 @app.post("/api/alerts")
 def api_alerts():
     body = request.get_json(silent=True) or {}
@@ -170,6 +202,20 @@ def api_search_scrip():
     if not symbol:
         return json_error("Symbol is required.")
     return jsonify(platform.search_scrip(symbol=symbol, expiry=expiry, option_type=option_type, strike_price=strike_price))
+
+
+@app.post("/api/ai/brief")
+def api_ai_brief():
+    body = request.get_json(silent=True) or {}
+    expiry = body.get("expiry") or None
+    spot = body.get("spot")
+    result = platform.ai_brief(
+        expiry=expiry,
+        spot=float(spot) if spot is not None else None,
+        question=body.get("question"),
+        focus=body.get("focus"),
+    )
+    return jsonify(result)
 
 
 if __name__ == "__main__":

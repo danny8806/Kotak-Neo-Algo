@@ -64,11 +64,27 @@
         <label>TOTP Secret
           <input id="totpSecretInput" type="password" autocomplete="off" placeholder="Optional authenticator secret">
         </label>
+        <label>AI API Key
+          <input id="openAiApiKeyInput" type="password" autocomplete="off" placeholder="Optional AI API key">
+        </label>
+        <label>Setup Name
+          <input id="setupNameInput" type="text" autocomplete="off" placeholder="Save this broker setup as...">
+        </label>
+        <label>Saved Setups
+          <select id="savedSetupSelect">
+            <option value="">No saved setup</option>
+          </select>
+        </label>
         <div class="button-row">
           <button id="diagnosticsBtn">Test</button>
           <button id="totpBtn">Generate TOTP</button>
           <button id="loginBtn" class="primary">Connect</button>
           <button id="logoutBtn">Logout</button>
+        </div>
+        <div class="button-row">
+          <button id="saveSetupBtn">Register New</button>
+          <button id="useSetupBtn">Use Old Setup</button>
+          <button id="deleteSetupBtn">Delete Setup</button>
         </div>
         <div id="connectionChecklist" class="stack checklist"></div>
         <div id="brokerMessage" class="stack"></div>
@@ -106,6 +122,7 @@
           <button data-tab-target="strategies" class="tab-button">Strategies</button>
           <button data-tab-target="trade" class="tab-button">Trade Terminal</button>
           <button data-tab-target="portfolio" class="tab-button">Portfolio</button>
+          <button data-tab-target="ai" class="tab-button">AI Copilot</button>
         </div>
       </header>
 
@@ -321,6 +338,35 @@
               <button type="submit">Search Scrip</button>
             </form>
             <div id="searchResults"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-ai">
+        <div class="content-grid">
+          <section class="panel">
+            <h3>AI Copilot</h3>
+            <form id="aiForm" class="stack compact">
+              <label>Focus
+                <select name="focus" id="aiFocusSelect">
+                  <option value="market">Market</option>
+                  <option value="strategy">Strategy</option>
+                  <option value="execution">Execution</option>
+                  <option value="risk">Risk</option>
+                </select>
+              </label>
+              <label>Your prompt
+                <textarea id="aiQuestionInput" name="question" rows="6" placeholder="Ask for a plan, trade idea, risk check, or execution checklist..."></textarea>
+              </label>
+              <button class="primary" type="submit">Run AI Brief</button>
+            </form>
+          </section>
+          <section class="panel wide">
+            <div class="panel-head">
+              <h3>AI Desk Output</h3>
+            </div>
+            <div id="aiCards" class="signal-cards compact-grid"></div>
+            <pre id="aiSummary" class="code-block">Ask the AI Copilot to review the live market structure, staged basket, and broker readiness.</pre>
           </section>
         </div>
       </section>

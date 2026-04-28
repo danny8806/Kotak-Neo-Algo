@@ -19,6 +19,9 @@ const elements = {
   mpinInput: document.getElementById("mpinInput"),
   totpInput: document.getElementById("totpInput"),
   totpSecretInput: document.getElementById("totpSecretInput"),
+  openAiApiKeyInput: document.getElementById("openAiApiKeyInput"),
+  setupNameInput: document.getElementById("setupNameInput"),
+  savedSetupSelect: document.getElementById("savedSetupSelect"),
   connectionChecklist: document.getElementById("connectionChecklist"),
   brokerStatus: document.getElementById("brokerStatus"),
   sdkStatus: document.getElementById("sdkStatus"),
@@ -48,6 +51,10 @@ const elements = {
   stagedBasket: document.getElementById("stagedBasket"),
   accountSnapshot: document.getElementById("accountSnapshot"),
   searchResults: document.getElementById("searchResults"),
+  aiFocusSelect: document.getElementById("aiFocusSelect"),
+  aiQuestionInput: document.getElementById("aiQuestionInput"),
+  aiCards: document.getElementById("aiCards"),
+  aiSummary: document.getElementById("aiSummary"),
   toast: document.getElementById("toast"),
 };
 
@@ -129,6 +136,8 @@ function gatherCredentials() {
     mpin: elements.mpinInput.value.trim(),
     totp: elements.totpInput.value.trim(),
     totp_secret: elements.totpSecretInput.value.trim(),
+    openai_api_key: elements.openAiApiKeyInput.value.trim(),
+    setup_name: elements.savedSetupSelect.value || elements.setupNameInput.value.trim(),
   };
 }
 
@@ -158,6 +167,16 @@ function renderConnectionChecklist(payload = state.payload) {
   `).join("");
 }
 
+function renderSavedSetups(setups = [], activeName = "") {
+  const options = [`<option value="">Select saved setup</option>`].concat(
+    setups.map((setup) => `<option value="${setup.name}" ${setup.name === activeName ? "selected" : ""}>${setup.name} • ${setup.environment} • ${setup.ucc || "no-ucc"}</option>`),
+  );
+  elements.savedSetupSelect.innerHTML = options.join("");
+  if (!elements.setupNameInput.value && activeName) {
+    elements.setupNameInput.value = activeName;
+  }
+}
+
 async function loadDashboard(options = {}) {
   const expiry = options.expiry ?? currentExpiry();
   const spot = options.spot ?? currentSpot();
@@ -174,7 +193,7 @@ async function loadDashboard(options = {}) {
 }
 
 function hydrateDashboard(payload, options = {}) {
-  const { metrics, signals, signal_score, stance, alerts, ideas, watchlist, strategies, staged_legs, pe_supports, ce_resistances, broker, credentials, last_diagnostic } = payload;
+  const { metrics, signals, signal_score, stance, alerts, ideas, watchlist, strategies, staged_legs, pe_supports, ce_resistances, broker, credentials, last_diagnostic, saved_setups } = payload;
 
   if (!options.preserveExpiry) {
     elements.expirySelect.innerHTML = payload.expiries.map((expiry) => `<option value="${expiry}" ${expiry === payload.selected_expiry ? "selected" : ""}>${expiry}</option>`).join("");
@@ -198,7 +217,9 @@ function hydrateDashboard(payload, options = {}) {
     if (!elements.uccInput.value) elements.uccInput.value = credentials.ucc || "";
     if (!elements.mpinInput.value) elements.mpinInput.value = credentials.mpin || "";
     if (!elements.totpSecretInput.value) elements.totpSecretInput.value = credentials.totp_secret || "";
+    if (!elements.openAiApiKeyInput.value) elements.openAiApiKeyInput.value = credentials.openai_api_key || "";
   }
+  renderSavedSetups(saved_setups || [], broker.active_setup_name || "");
   renderConnectionChecklist(payload);
   renderDiagnostics(last_diagnostic);
 
@@ -482,6 +503,22 @@ function renderAccountSnapshot(payload) {
   elements.accountSnapshot.innerHTML = sections.join("");
 }
 
+function renderAiResult(result) {
+  if (!result || result.status !== "ok") {
+    elements.aiSummary.textContent = "AI Copilot is not ready yet.";
+    elements.aiCards.innerHTML = "";
+    return;
+  }
+  elements.aiSummary.textContent = result.summary || "No AI summary available.";
+  elements.aiCards.innerHTML = (result.cards || []).map((card) => `
+    <article class="signal-card">
+      <div class="signal-title">${card.title}</div>
+      <div class="metric-value">${card.value}</div>
+      <p class="muted">${card.detail}</p>
+    </article>
+  `).join("");
+}
+
 function buildMiniTable(rows) {
   const keys = Object.keys(rows[0]).slice(0, 6);
   const head = keys.map((key) => `<th>${key}</th>`).join("");
@@ -548,6 +585,63 @@ async function handleDiagnostics() {
 async function handleLogout() {
   const result = await fetchJson("/api/logout", { method: "POST" });
   toast(result.message || "Broker disconnected");
+  await loadDashboard({ preserveExpiry: true });
+}
+
+async function handleSaveSetup() {
+  const name = elements.setupNameInput.value.trim();
+  if (!name) {
+    toast("Enter a setup name first.", "error");
+    return;
+  }
+  const result = await fetchJson("/api/setups", {
+    method: "POST",
+    body: JSON.stringify({ ...gatherCredentials(), name }),
+  });
+  renderSavedSetups(result.saved_setups || [], result.setup?.name || name);
+  toast(result.message || "Setup saved");
+  await loadDashboard({ preserveExpiry: true });
+}
+
+async function handleUseSetup() {
+  const name = elements.savedSetupSelect.value;
+  if (!name) {
+    toast("Choose a saved setup first.", "error");
+    return;
+  }
+  const result = await fetchJson("/api/setups/use", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  const credentials = result.credentials || {};
+  elements.environmentInput.value = credentials.environment || "prod";
+  elements.consumerKeyInput.value = credentials.consumer_key || "";
+  elements.mobileInput.value = credentials.mobile_number || "";
+  elements.uccInput.value = credentials.ucc || "";
+  elements.mpinInput.value = credentials.mpin || "";
+  elements.totpSecretInput.value = credentials.totp_secret || "";
+  elements.openAiApiKeyInput.value = credentials.openai_api_key || "";
+  elements.setupNameInput.value = name;
+  renderSavedSetups(result.saved_setups || [], name);
+  renderConnectionChecklist(state.payload);
+  toast(result.message || "Saved setup loaded");
+  await loadDashboard({ preserveExpiry: true });
+}
+
+async function handleDeleteSetup() {
+  const name = elements.savedSetupSelect.value || elements.setupNameInput.value.trim();
+  if (!name) {
+    toast("Choose a saved setup to delete.", "error");
+    return;
+  }
+  const result = await fetchJson("/api/setups/delete", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  elements.savedSetupSelect.value = "";
+  if (elements.setupNameInput.value === name) elements.setupNameInput.value = "";
+  renderSavedSetups(result.saved_setups || [], "");
+  toast(result.message || "Setup deleted");
   await loadDashboard({ preserveExpiry: true });
 }
 
@@ -688,6 +782,22 @@ async function handleSearch(event) {
   renderTable(elements.searchResults, result.records || [], Object.keys((result.records || [])[0] || {}).map((key) => ({ key, label: key })));
 }
 
+async function handleAiSubmit(event) {
+  event.preventDefault();
+  const result = await fetchJson("/api/ai/brief", {
+    method: "POST",
+    body: JSON.stringify({
+      focus: elements.aiFocusSelect.value,
+      question: elements.aiQuestionInput.value.trim(),
+      expiry: currentExpiry(),
+      spot: currentSpot(),
+    }),
+  });
+  renderAiResult(result);
+  setActiveTab("ai");
+  toast("AI brief ready");
+}
+
 function wireEvents() {
   document.querySelectorAll(".tab-button").forEach((button) => {
     button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget));
@@ -702,6 +812,9 @@ function wireEvents() {
   document.getElementById("diagnosticsBtn").addEventListener("click", handleDiagnostics);
   document.getElementById("totpBtn").addEventListener("click", handleGenerateTotp);
   document.getElementById("logoutBtn").addEventListener("click", handleLogout);
+  document.getElementById("saveSetupBtn").addEventListener("click", handleSaveSetup);
+  document.getElementById("useSetupBtn").addEventListener("click", handleUseSetup);
+  document.getElementById("deleteSetupBtn").addEventListener("click", handleDeleteSetup);
   document.getElementById("stageStrategyBtn").addEventListener("click", handleStageStrategy);
   document.getElementById("clearStagedBtn").addEventListener("click", handleClearStaged);
   document.getElementById("executeStagedBtn").addEventListener("click", handleExecuteStaged);
@@ -711,6 +824,7 @@ function wireEvents() {
   document.getElementById("cancelForm").addEventListener("submit", handleCancel);
   document.getElementById("alertForm").addEventListener("submit", handleAlertSubmit);
   document.getElementById("searchForm").addEventListener("submit", handleSearch);
+  document.getElementById("aiForm").addEventListener("submit", handleAiSubmit);
   elements.strategyOutlookFilter.addEventListener("change", syncStrategySelect);
   elements.strategySelect.addEventListener("change", () => {
     state.selectedStrategy = state.strategies.find((item) => item.name === elements.strategySelect.value) || null;
@@ -726,6 +840,7 @@ function wireEvents() {
     elements.mpinInput,
     elements.totpInput,
     elements.totpSecretInput,
+    elements.openAiApiKeyInput,
   ].forEach((field) => field.addEventListener("input", () => renderConnectionChecklist(state.payload)));
 }
 

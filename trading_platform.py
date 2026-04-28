@@ -1,4 +1,5 @@
 import importlib
+import json
 import math
 import os
 import re
@@ -21,7 +22,9 @@ except Exception:
 
 ROOT = Path(__file__).resolve().parent
 DATA_FILE = ROOT / "march_options.csv"
+SETUPS_FILE = ROOT / ".broker_setups.json"
 NIFTY_INDEX_TOKEN = "26000"
+BROKER_FIELDS = ("environment", "consumer_key", "mobile_number", "ucc", "mpin", "totp_secret", "openai_api_key")
 
 if load_dotenv is not None:
     load_dotenv(ROOT / ".env")
@@ -37,6 +40,19 @@ def normalize_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 def env_value(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
+
+
+def read_json_file(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return default
+
+
+def write_json_file(path: Path, payload: Any) -> None:
+    path.write_text(json.dumps(payload, indent=2))
 
 
 def load_neo_api_class():
@@ -525,6 +541,27 @@ def friendly_sdk_error(error: str) -> str:
     return error
 
 
+def mask_secret(value: str, visible: int = 3) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        return ""
+    if len(clean) <= visible * 2:
+        return "*" * len(clean)
+    return f"{clean[:visible]}{'*' * max(len(clean) - (visible * 2), 4)}{clean[-visible:]}"
+
+
+def summarize_setup(name: str, payload: dict[str, Any], active_name: str | None = None) -> dict[str, Any]:
+    return {
+        "name": name,
+        "environment": payload.get("environment") or "prod",
+        "ucc": payload.get("ucc") or "",
+        "mobile_number": mask_secret(payload.get("mobile_number") or "", visible=2),
+        "has_totp_secret": bool(payload.get("totp_secret")),
+        "has_openai_api_key": bool(payload.get("openai_api_key")),
+        "is_active": name == active_name,
+    }
+
+
 def pick_numeric_column(frame: pd.DataFrame, candidates: list[str]) -> str | None:
     for candidate in candidates:
         if candidate in frame.columns:
@@ -622,7 +659,10 @@ class TradingPlatformState:
             "ucc": env_value("KOTAK_UCC"),
             "mpin": env_value("KOTAK_MPIN"),
             "totp_secret": env_value("KOTAK_TOTP_SECRET"),
+            "openai_api_key": env_value("OPENAI_API_KEY"),
         }
+        self.saved_setups = read_json_file(SETUPS_FILE, {})
+        self.active_setup_name = None
         self.last_broker_message = ""
         self.last_diagnostic: dict[str, Any] | None = None
 
@@ -640,8 +680,10 @@ class TradingPlatformState:
                 "KOTAK_UCC": bool(self.credentials["ucc"]),
                 "KOTAK_MPIN": bool(self.credentials["mpin"]),
                 "KOTAK_TOTP_SECRET": bool(self.credentials["totp_secret"]),
+                "OPENAI_API_KEY": bool(self.credentials["openai_api_key"]),
             },
             "last_broker_message": self.last_broker_message,
+            "active_setup_name": self.active_setup_name,
         }
 
 
@@ -655,7 +697,7 @@ class TradingPlatform:
     def resolve_credentials(self, overrides: dict[str, Any] | None = None) -> dict[str, str]:
         resolved = dict(self.state.credentials)
         if overrides:
-            for key in ("environment", "consumer_key", "mobile_number", "ucc", "mpin", "totp_secret"):
+            for key in BROKER_FIELDS:
                 value = overrides.get(key)
                 if value is not None and str(value).strip():
                     resolved[key] = str(value).strip()
@@ -699,6 +741,7 @@ class TradingPlatform:
 
     def connect_broker(self, overrides: dict[str, Any] | None = None) -> tuple[bool, str]:
         credentials = self.resolve_credentials(overrides)
+        setup_name = str((overrides or {}).get("setup_name") or "").strip() or None
         totp_code = str((overrides or {}).get("totp") or "").strip()
 
         if not totp_code and credentials.get("totp_secret") and pyotp is not None:
@@ -749,6 +792,8 @@ class TradingPlatform:
 
         with self.state.lock:
             self.state.credentials.update(credentials)
+            if setup_name:
+                self.state.active_setup_name = setup_name
             self.state.broker_client = client
             self.state.quote_client = client
             self.state.login_response = login_response
@@ -894,6 +939,114 @@ class TradingPlatform:
             ],
             "staged_legs": staged,
             "last_diagnostic": self.state.last_diagnostic,
+            "saved_setups": self.saved_setup_summaries(),
+        }
+
+    def saved_setup_summaries(self) -> list[dict[str, Any]]:
+        setups = self.state.saved_setups or {}
+        active = self.state.active_setup_name
+        return [summarize_setup(name, payload, active) for name, payload in sorted(setups.items())]
+
+    def save_setup(self, name: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            return {"status": "error", "message": "Setup name is required."}
+        credentials = self.resolve_credentials(overrides)
+        stored = {key: credentials.get(key, "") for key in BROKER_FIELDS}
+        with self.state.lock:
+            self.state.saved_setups[clean_name] = stored
+            self.state.active_setup_name = clean_name
+            self.state.credentials.update(stored)
+            write_json_file(SETUPS_FILE, self.state.saved_setups)
+        return {
+            "status": "ok",
+            "message": f"Saved setup '{clean_name}'.",
+            "setup": summarize_setup(clean_name, stored, clean_name),
+            "credentials": self.credentials_payload(),
+            "saved_setups": self.saved_setup_summaries(),
+        }
+
+    def use_setup(self, name: str) -> dict[str, Any]:
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            return {"status": "error", "message": "Setup name is required."}
+        payload = self.state.saved_setups.get(clean_name)
+        if not payload:
+            return {"status": "error", "message": f"Setup '{clean_name}' was not found."}
+        with self.state.lock:
+            self.state.active_setup_name = clean_name
+            self.state.credentials.update({key: str(payload.get(key) or "") for key in BROKER_FIELDS})
+            self.state.last_broker_message = f"Loaded saved setup '{clean_name}'."
+        return {
+            "status": "ok",
+            "message": f"Loaded setup '{clean_name}'.",
+            "credentials": self.credentials_payload(),
+            "saved_setups": self.saved_setup_summaries(),
+        }
+
+    def delete_setup(self, name: str) -> dict[str, Any]:
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            return {"status": "error", "message": "Setup name is required."}
+        with self.state.lock:
+            if clean_name not in self.state.saved_setups:
+                return {"status": "error", "message": f"Setup '{clean_name}' was not found."}
+            self.state.saved_setups.pop(clean_name, None)
+            if self.state.active_setup_name == clean_name:
+                self.state.active_setup_name = None
+            write_json_file(SETUPS_FILE, self.state.saved_setups)
+        return {"status": "ok", "message": f"Deleted setup '{clean_name}'.", "saved_setups": self.saved_setup_summaries()}
+
+    def ai_brief(self, expiry: str | None = None, spot: float | None = None, question: str | None = None, focus: str | None = None) -> dict[str, Any]:
+        payload = self.dashboard_payload(expiry=expiry, spot=spot)
+        metrics = payload["metrics"]
+        watchlist = payload["watchlist"][:4]
+        signals = payload["signals"][:3]
+        staged = payload["staged_legs"]
+        focus_mode = (focus or "market").strip().lower()
+        question_text = (question or "").strip()
+
+        top_watch = ", ".join([f"{row['ptrdsymbol']} ({row['option_side']} {int(row['strike'])})" for row in watchlist]) or "No focused contracts yet."
+        signal_lines = [f"{item['name']}: {item['bias']} ({item['confidence']}%)" for item in signals]
+        risk_lines = [
+            f"Spot {metrics['spot']} vs support {metrics['support']} and resistance {metrics['resistance']}.",
+            f"PCR {metrics['total_pcr']} with ATM PCR {metrics['atm_pcr']}.",
+            f"Max pain sits at {metrics['max_pain']} with gap {metrics['max_pain_gap_pct']}%.",
+        ]
+
+        recommendation = {
+            "market": "Trade with the prevailing signal only after confirming price is holding above support for bullish ideas or below resistance for bearish ideas.",
+            "strategy": "Prefer defined-risk spreads when signal confidence is moderate and reserve naked premium selling for high-confidence range conditions.",
+            "execution": "Run diagnostics, connect the broker, preview margin, then submit only the staged legs you have reviewed.",
+            "risk": "Keep position size tied to lot count, avoid adding size near max-pain chop, and cut exposure if support/resistance breaks against the thesis.",
+        }.get(focus_mode, "Use the staged strategy only when broker diagnostics are clean and the signal pack still matches the market structure.")
+
+        if staged:
+            recommendation += f" You currently have {len(staged)} staged leg(s), so verify basket quantity and margin before going live."
+
+        answer = "\n".join([
+            f"AI desk view: {payload['stance']} bias with signal score {payload['signal_score']}.",
+            f"Focus contracts: {top_watch}",
+            "Signal stack: " + "; ".join(signal_lines),
+            "Risk map: " + " ".join(risk_lines),
+            f"Suggested action: {recommendation}",
+            f"Broker state: {'connected' if payload['broker']['broker_ready'] else 'not connected'}.",
+            f"User prompt: {question_text}" if question_text else "User prompt: none supplied.",
+        ])
+
+        return {
+            "status": "ok",
+            "focus": focus_mode,
+            "question": question_text,
+            "summary": answer,
+            "cards": [
+                {"title": "Desk Bias", "value": payload["stance"], "detail": f"Signal score {payload['signal_score']}"},
+                {"title": "Execution Readiness", "value": "Connected" if payload["broker"]["broker_ready"] else "Needs login", "detail": payload["broker"]["last_broker_message"] or "Broker session status"},
+                {"title": "Best Next Move", "value": recommendation, "detail": f"Top watchlist: {top_watch}"},
+            ],
+            "watchlist": watchlist,
+            "signals": signals,
+            "staged_legs": staged,
         }
 
     def add_alert(self, name: str, metric: str, operator: str, threshold: float) -> dict[str, Any]:
