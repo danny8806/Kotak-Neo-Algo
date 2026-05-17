@@ -1,95 +1,133 @@
-# Kotak Algo
+# Kotak Neo AI Algo Trading Terminal
 
-Kotak Algo is a local broker-integrated trading web app for Kotak Neo option workflows. It combines market structure analytics, strategy staging, broker login helpers, saved connection setups, and an AI copilot workspace inside one Flask website.
+Full-stack algorithmic trading terminal for Kotak Neo with AI-powered analysis, NSE public option chain data, risk management, and automated strategy execution.
 
-## Highlights
+## Features
 
-- Broker-integrated order workflow for Kotak Neo
-- Saved broker setups for reusing old credentials locally
-- Guided TOTP and diagnostics flow
-- Option-chain analytics from local market data
-- Strategy staging, payoff view, margin preview, modify/cancel flows
-- AI Copilot tab for market, strategy, execution, and risk guidance
-- Local-first secret handling through `.env` and ignored local setup storage
+### 📊 NSE Public Option Chain
+- Free option chain data (no API key) — indices + 200+ stocks
+- Real-time PCR, Max Pain, OI concentration, IV skew
+- 17-column side-by-side CE/PE table: LTP, OI, OI Change, IV, Bid, Ask, Volume, Change
+- Underlying separator line — visual strike split at spot price
+- Auto-refresh (3s toggle)
+- Expiry date dropdown populated from NSE API
 
-## Screenshots
+### 🤖 AI Analysis (Groq)
+- Option chain analysis: market bias, support/resistance, OI clustering, IV skew
+- AI chat, market analysis, strategy generation, risk assessment, sentiment analysis
+- Trade journal analysis (identifies mistakes, patterns, improvements)
 
-### Trade Terminal
+### 📈 Technical Analysis + Charts
+- Interactive candlestick charts (Lightweight Charts)
+- RSI, MACD, EMA 20/50, Bollinger Bands, SuperTrend, VWAP, ATR
+- Ichimoku Cloud (Tenkan/Kijun + Senkou Span A/B)
+- Fibonacci retracement levels overlay
+- All computed client-side for speed
 
-![Trade Terminal](assets/screenshots/trade-terminal.png)
+### 🔄 Algo Trading Engine
+- Background thread evaluates 14 condition types every 60s
+- Strategy builder with buy/sell conditions: EMA cross, RSI, MACD, BB, SuperTrend, volume spike, VWAP
+- 4 pre-built strategy templates
+- Backtesting engine with win rate, PnL, trade log
+- Kill switch (cancels all orders + blocks placement)
 
-### AI Copilot
+### ⚙️ Risk Management
+- Daily loss limits, max trades, position size caps
+- Kill switch with one-click activation
+- AI-powered risk advisor
 
-![AI Copilot](assets/screenshots/ai-copilot.png)
+### 📱 Telegram Alerts
+- Price alerts with desktop Notification API + Telegram fallback
+- Configurable bot token and chat ID
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python, Flask, Flask-SocketIO |
+| Frontend | Vanilla JS, HTML, CSS (dark terminal theme) |
+| Database | JSON files (algo strategies, trade logs) |
+| AI | Groq Responses API (`openai/gpt-oss-20b`) |
+| Broker | Kotak Neo API v2 SDK |
+| Charts | Lightweight Charts (TradingView) |
+| Historical | yfinance (free, no auth) |
+| Option Chain | NSE public API (free, no key) |
+| Notifications | Telegram Bot API + Browser Notification API |
 
 ## Project Structure
 
-```text
-app.py                 Flask app and API routes
-trading_platform.py    Trading logic, broker integration, analytics, saved setups
-templates/index.html   Main web UI
-static/app.js          Frontend interactions
-static/styles.css      UI styling
-march_options.csv      Local option-chain source data
-kotak.py               Legacy Streamlit-based implementation
-kotak.ipynb            Legacy notebook, sanitized for repo safety
+```
+├── app.py                 # Flask app — all API routes (56+ endpoints)
+├── templates/
+│   └── index.html         # Single-page UI (~2850 lines)
+├── algo_engine.py         # Strategy engine, backtesting, indicator computation
+├── ai_assistant.py        # Groq AI integration (TradingAIAssistant class)
+├── websocket_handler.py   # Live data WebSocket handler (stub)
+├── .env                   # Credentials (gitignored)
+├── .gitignore
 ```
 
-## Requirements
-
-- Python 3.11 recommended
-- Kotak Neo API access
-- TOTP-enabled Kotak Neo account
-
-## Local Setup
-
-Create a virtual environment and install dependencies:
+## Setup
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+# 1. Clone & enter
+git clone https://github.com/danny8806/Kotak-Neo-Algo.git
+cd Kotak-Neo-Algo
+
+# 2. Virtual environment
+python3 -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+
+# 3. Install
+pip install -r requirements.txt
+
+# 4. Create .env (see below)
+
+# 5. Run
+python app.py
 ```
 
-Create a local `.env` file from `.env.example` and add your own credentials:
+## `.env` Configuration
 
 ```env
-KOTAK_ENVIRONMENT=prod
-KOTAK_CONSUMER_KEY=your_consumer_key
-KOTAK_MOBILE_NUMBER=+91xxxxxxxxxx
-KOTAK_UCC=your_ucc
-KOTAK_MPIN=your_mpin
-KOTAK_TOTP_SECRET=your_totp_secret
-OPENAI_API_KEY=your_optional_ai_key
+GROQ_API_KEY=gsk_xxx              # Required for AI features
+CONSUMER_KEY=xxx                  # Kotak Neo consumer key
+MOBILE_NUMBER=+918xxxxxxxxx       # Kotak Neo registered mobile
+UCC=XXXXX                         # Kotak Neo UCC
+MPIN=123456                       # Kotak Neo MPIN
+TELEGRAM_BOT_TOKEN=xxx            # Optional: Telegram alerts
+TELEGRAM_CHAT_ID=xxx              # Optional: Telegram alerts
 ```
 
-## Run
+## IP Whitelisting
+
+Kotak Neo requires your public IP to be whitelisted in their dashboard. Run:
 
 ```bash
-.venv/bin/python app.py
+curl ifconfig.me
 ```
 
-Open:
+Add the returned IP at [Kotak Neo Dashboard](https://neo.kotaksecurities.com).
 
-- `http://127.0.0.1:5000`
+## Key API Endpoints
 
-## Using Saved Setups
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/nse/option-chain` | NSE public option chain (indices + stocks) |
+| `GET /api/nse/symbols` | List all indices and stocks |
+| `GET /api/nse/expiry-dates` | Expiry dates for a symbol |
+| `GET /api/historical` | OHLCV data via yfinance |
+| `GET /api/option-chain` | Kotak Neo option chain (requires login) |
+| `POST /api/ai/chat` | AI chat with trading context |
+| `POST /api/algo/backtest` | Run strategy backtest |
+| `POST /api/kill-switch` | Toggle kill switch |
+| `POST /api/place-order` | Place order via NeoAPI |
+| `GET /api/live-pnl` | Real-time P&L from positions |
 
-Inside the Broker Control panel:
+## Screenshots
 
-1. Enter credentials and a setup name
-2. Click `Register New`
-3. Pick the saved setup later from `Saved Setups`
-4. Click `Use Old Setup`
-5. Run `Test`, generate or paste TOTP, then `Connect`
-
-Saved setups are stored only in local `.broker_setups.json`, which is ignored by Git.
-
-## Notes
-
-- `.env` is not committed and should stay local.
-- The notebook was sanitized before publication to remove embedded credentials and session output.
-- `kotak.py` is kept as a legacy implementation; the primary app is the Flask website.
+<!-- Add screenshots here -->
 
 ## Disclaimer
 
-This project is for educational and personal workflow use. Live trading involves real financial risk. Verify broker API behavior, order payloads, limits, and account protections before placing live orders.
+For educational and personal use. Live trading involves real financial risk. Verify broker API behavior, order payloads, and account protections before placing live orders.
