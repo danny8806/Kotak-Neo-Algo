@@ -757,7 +757,25 @@ web: gunicorn -k eventlet -w 1 app:app
 
 ## Screenshots
 
-<!-- Add screenshots here -->
+### Dashboard
+![Dashboard](assets/screenshots/dashboard.png)
+
+### Option Chain (NSE)
+![Option Chain](assets/screenshots/option-chain.png)
+
+### AI Analysis
+![AI Analysis](assets/screenshots/ai-analysis.png)
+
+### Candlestick Charts
+![Charts](assets/screenshots/charts.png)
+
+### Algo Trading
+![Algo Trading](assets/screenshots/algo-trading.png)
+
+### Risk Management
+![Risk Management](assets/screenshots/risk-management.png)
+
+> **Note**: Replace these placeholder images by taking screenshots of the app and saving them to `assets/screenshots/`. The README will automatically display them once added to the repo.
 
 ---
 
