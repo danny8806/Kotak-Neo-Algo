@@ -23,6 +23,7 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 - [Telegram Alerts](#telegram-alerts)
 - [Deployment](#deployment)
 - [API Reference](#api-reference)
+- [Screenshots](#screenshots)
 - [Disclaimer](#disclaimer)
 
 ---
@@ -757,25 +758,81 @@ web: gunicorn -k eventlet -w 1 app:app
 
 ## Screenshots
 
-### Dashboard
-![Dashboard](assets/screenshots/dashboard.png)
+### Dashboard Overview
+![Dashboard Overview](assets/screenshots/dashboard-overview.png)
 
-### Option Chain (NSE)
-![Option Chain](assets/screenshots/option-chain.png)
+The dashboard gives a quick account snapshot with day P&L, active positions, trades today, margin, holdings status, and shortcut actions for AI portfolio analysis and risk checks.
 
-### AI Analysis
-![AI Analysis](assets/screenshots/ai-analysis.png)
+### Trading - Place Order
+![Trading Place Order](assets/screenshots/trading-place-order.png)
 
-### Candlestick Charts
-![Charts](assets/screenshots/charts.png)
+The trading screen provides a complete order ticket for NSE orders, including transaction side, order type, product, validity, quantity, price, trigger price, AMO selection, and margin checking.
 
-### Algo Trading
-![Algo Trading](assets/screenshots/algo-trading.png)
+### Orders - Order Book
+![Orders Book](assets/screenshots/orders-book.png)
 
-### Risk Management
-![Risk Management](assets/screenshots/risk-management.png)
+The order book centralizes live and historical order status with refresh and order-feed actions. When broker data is unavailable, the AI summary explains the missing state and next action.
 
-> **Note**: Replace these placeholder images by taking screenshots of the app and saving them to `assets/screenshots/`. The README will automatically display them once added to the repo.
+### Account Profile
+![Account Profile](assets/screenshots/account-profile.png)
+
+The account page confirms login state, displays profile details, shows funds and limits, and summarizes recent trade report data for the connected Kotak Neo session.
+
+### Market Data - Technical Indicators
+![Technical Indicators](assets/screenshots/technical-indicators.png)
+
+The market data module calculates technical indicators such as LTP, RSI, MACD, EMA trend, Bollinger status, SuperTrend, Ichimoku levels, Fibonacci levels, VWAP, ATR, volume, and day change.
+
+### Option Chain Summary
+![Option Chain Summary](assets/screenshots/option-chain-summary.png)
+
+The option chain page loads NSE public option data with underlying price, PCR, max pain, total CE/PE open interest, expiry selection, and AI analysis controls.
+
+### Option Chain Table
+![Option Chain Table](assets/screenshots/option-chain-ai-analysis.png)
+
+The option chain table highlights the underlying price row and max-pain strike while showing CE-side and PE-side market data such as LTP, OI, OI change, IV, bid, ask, volume, and price change.
+
+### Option Chain AI Analysis
+![Option Chain AI Analysis](assets/screenshots/option-chain-analysis-detail.png)
+
+The AI option-chain analysis interprets PCR, max pain, open-interest concentration, smart-money positioning, support/resistance zones, and likely market bias.
+
+### Option Chain AI Detail View
+![Option Chain AI Detail View](assets/screenshots/option-chain-analysis-alt.png)
+
+The detailed options view keeps the AI commentary alongside live option-chain controls so traders can refresh data, rerun analysis, and compare the narrative against current OI levels.
+
+### AI Chat - Market Outlook
+![AI Chat Market Outlook](assets/screenshots/ai-chat-outlook.png)
+
+The AI chat assistant answers trading questions in context, including market outlooks, sector observations, macro notes, catalysts, and practical trading considerations.
+
+### AI Strategy Generator
+![AI Strategy Generator](assets/screenshots/ai-strategy-generator.png)
+
+The strategy generator creates structured trading plans from a symbol, timeframe, and risk tolerance, including entry rules, exit rules, stop-loss logic, targets, and indicator setup.
+
+### AI Risk Assessment
+![AI Risk Assessment](assets/screenshots/ai-risk-assessment.png)
+
+The AI risk assessment form evaluates trade-level risk using portfolio value, cash balance, symbol, quantity, price, and buy/sell side.
+
+### AI Trade Journal
+![AI Trade Journal](assets/screenshots/trade-journal.png)
+
+The trade journal tool fetches and analyzes trade history to identify mistakes, repeated patterns, and improvement areas.
+
+### Risk Management & Alerts
+![Risk Management Alerts](assets/screenshots/risk-management-alerts.png)
+
+The risk management page combines daily limits, trade counters, max position size controls, kill switch controls, AI risk advice, portfolio risk scans, and Telegram-enabled price alerts.
+
+### Existing Gallery Assets
+
+![Trade Terminal](assets/screenshots/trade-terminal.png)
+
+![AI Copilot](assets/screenshots/ai-copilot.png)
 
 ---
 
