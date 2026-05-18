@@ -758,81 +758,61 @@ web: gunicorn -k eventlet -w 1 app:app
 
 ## Screenshots
 
-### Dashboard Overview
-![Dashboard Overview](assets/screenshots/dashboard-overview.png)
-
-The dashboard gives a quick account snapshot with day P&L, active positions, trades today, margin, holdings status, and shortcut actions for AI portfolio analysis and risk checks.
-
-### Trading - Place Order
-![Trading Place Order](assets/screenshots/trading-place-order.png)
-
-The trading screen provides a complete order ticket for NSE orders, including transaction side, order type, product, validity, quantity, price, trigger price, AMO selection, and margin checking.
-
-### Orders - Order Book
-![Orders Book](assets/screenshots/orders-book.png)
-
-The order book centralizes live and historical order status with refresh and order-feed actions. When broker data is unavailable, the AI summary explains the missing state and next action.
-
-### Account Profile
-![Account Profile](assets/screenshots/account-profile.png)
-
-The account page confirms login state, displays profile details, shows funds and limits, and summarizes recent trade report data for the connected Kotak Neo session.
-
-### Market Data - Technical Indicators
-![Technical Indicators](assets/screenshots/technical-indicators.png)
-
-The market data module calculates technical indicators such as LTP, RSI, MACD, EMA trend, Bollinger status, SuperTrend, Ichimoku levels, Fibonacci levels, VWAP, ATR, volume, and day change.
-
-### Option Chain Summary
-![Option Chain Summary](assets/screenshots/option-chain-summary.png)
-
-The option chain page loads NSE public option data with underlying price, PCR, max pain, total CE/PE open interest, expiry selection, and AI analysis controls.
-
-### Option Chain Table
-![Option Chain Table](assets/screenshots/option-chain-ai-analysis.png)
-
-The option chain table highlights the underlying price row and max-pain strike while showing CE-side and PE-side market data such as LTP, OI, OI change, IV, bid, ask, volume, and price change.
-
-### Option Chain AI Analysis
-![Option Chain AI Analysis](assets/screenshots/option-chain-analysis-detail.png)
-
-The AI option-chain analysis interprets PCR, max pain, open-interest concentration, smart-money positioning, support/resistance zones, and likely market bias.
-
-### Option Chain AI Detail View
-![Option Chain AI Detail View](assets/screenshots/option-chain-analysis-alt.png)
-
-The detailed options view keeps the AI commentary alongside live option-chain controls so traders can refresh data, rerun analysis, and compare the narrative against current OI levels.
-
-### AI Chat - Market Outlook
 ![AI Chat Market Outlook](assets/screenshots/ai-chat-outlook.png)
 
-The AI chat assistant answers trading questions in context, including market outlooks, sector observations, macro notes, catalysts, and practical trading considerations.
+AI Chat gives market outlooks, sector notes, catalysts, and trading context in a conversational format.
 
-### AI Strategy Generator
+![Account Profile](assets/screenshots/account-profile.png)
+
+Account shows login status, client profile details, funds and limits, and trade report summary.
+
 ![AI Strategy Generator](assets/screenshots/ai-strategy-generator.png)
 
-The strategy generator creates structured trading plans from a symbol, timeframe, and risk tolerance, including entry rules, exit rules, stop-loss logic, targets, and indicator setup.
+Strategy Generator creates a trade plan from symbol, timeframe, and risk tolerance.
 
-### AI Risk Assessment
 ![AI Risk Assessment](assets/screenshots/ai-risk-assessment.png)
 
-The AI risk assessment form evaluates trade-level risk using portfolio value, cash balance, symbol, quantity, price, and buy/sell side.
+Risk Assessment checks portfolio value, cash balance, symbol, quantity, price, and trade side before entry.
 
-### AI Trade Journal
+![Orders Book](assets/screenshots/orders-book.png)
+
+Orders shows the order book, order feed, refresh controls, and broker response status.
+
+![Trading Place Order](assets/screenshots/trading-place-order.png)
+
+Trading provides the order ticket for placing, modifying, cancelling, searching scrips, and checking margin.
+
 ![AI Trade Journal](assets/screenshots/trade-journal.png)
 
-The trade journal tool fetches and analyzes trade history to identify mistakes, repeated patterns, and improvement areas.
+Trade Journal fetches trades and analyzes mistakes, patterns, and improvement areas.
 
-### Risk Management & Alerts
 ![Risk Management Alerts](assets/screenshots/risk-management-alerts.png)
 
-The risk management page combines daily limits, trade counters, max position size controls, kill switch controls, AI risk advice, portfolio risk scans, and Telegram-enabled price alerts.
+Risk Management handles daily limits, position caps, kill switch controls, AI risk advice, and price alerts.
 
-### Existing Gallery Assets
+![Dashboard Overview](assets/screenshots/dashboard-overview.png)
 
-![Trade Terminal](assets/screenshots/trade-terminal.png)
+Dashboard summarizes P&L, positions, trades today, margin, holdings, and quick AI tools.
 
-![AI Copilot](assets/screenshots/ai-copilot.png)
+![Option Chain AI Analysis](assets/screenshots/option-chain-analysis-detail.png)
+
+Option Chain AI Analysis explains PCR, max pain, OI concentration, support/resistance, and market bias.
+
+![Option Chain AI Detail View](assets/screenshots/option-chain-analysis-alt.png)
+
+Option Chain detail keeps AI commentary visible beside refresh and analysis controls.
+
+![Option Chain Summary](assets/screenshots/option-chain-summary.png)
+
+Option Chain Summary shows underlying price, PCR, max pain, CE OI, PE OI, expiry, and symbol controls.
+
+![Technical Indicators](assets/screenshots/technical-indicators.png)
+
+Technical Indicators show LTP, RSI, MACD, EMA trend, Bollinger, SuperTrend, VWAP, ATR, volume, and day change.
+
+![Option Chain Table](assets/screenshots/option-chain-ai-analysis.png)
+
+Option Chain Table displays strike-wise CE/PE LTP, OI, OI change, IV, bid, ask, volume, and price change.
 
 ---
 
