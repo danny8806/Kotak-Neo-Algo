@@ -715,6 +715,29 @@ web: gunicorn -k eventlet -w 1 app:app
 
 ---
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Dashboard Overview](assets/screenshots/dashboard-overview.png) | ![Orders Book](assets/screenshots/orders-book.png) |
+| **Dashboard** — P&L, positions, trades, holdings, AI tools | **Orders** — Order book with status badges and refresh |
+| ![Trading Place Order](assets/screenshots/trading-place-order.png) | ![Option Chain Summary](assets/screenshots/option-chain-summary.png) |
+| **Order Ticket** — Place/modify/cancel with scrip search & margin | **Option Chain** — Underlying, PCR, Max Pain, CE/PE OI, expiry |
+| ![Option Chain Table](assets/screenshots/option-chain-ai-analysis.png) | ![Option Chain AI Detail](assets/screenshots/option-chain-analysis-detail.png) |
+| **Option Chain Table** — Strike-wise CE/PE with full data | **AI Analysis** — PCR, max pain, OI concentration, S/R, strategies |
+| ![Technical Indicators](assets/screenshots/technical-indicators.png) | ![AI Chat Market Outlook](assets/screenshots/ai-chat-outlook.png) |
+| **Technicals** — RSI, MACD, EMA, BB, SuperTrend, VWAP, chart | **AI Chat** — Market outlook, sectors, catalysts, context |
+| ![AI Copilot](assets/screenshots/ai-copilot.png) | ![AI Strategy Generator](assets/screenshots/ai-strategy-generator.png) |
+| **AI Copilot** — Trading-aware assistant | **Strategy Generator** — Plan from symbol + timeframe + risk |
+| ![AI Risk Assessment](assets/screenshots/ai-risk-assessment.png) | ![Trade Journal](assets/screenshots/trade-journal.png) |
+| **Risk Assessment** — Portfolio value, cash, position sizing | **Trade Journal** — AI reviews mistakes, patterns, improvements |
+| ![Risk Management & Alerts](assets/screenshots/risk-management-alerts.png) | ![Account Profile](assets/screenshots/account-profile.png) |
+| **Risk** — Daily limits, kill switch, AI advice, price alerts | **Profile** — Login status, client details, funds, trade report |
+| ![Trade Terminal](assets/screenshots/trade-terminal.png) | ![Option Chain Analysis](assets/screenshots/option-chain-analysis-alt.png) |
+| **Trade Terminal** — Full trading interface | **Options Detail** — AI commentary beside controls |
+
+---
+
 ## Disclaimer
 
 **WARNING: Trading involves substantial risk of loss.**
