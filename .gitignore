@@ -4,3 +4,10 @@ __pycache__/
 .venv/
 .ipynb_checkpoints/
 *.pyc
+.env.angel
+app.log
+app2.log
+logs/
+market_data/
+.DS_Store
+algo_core/

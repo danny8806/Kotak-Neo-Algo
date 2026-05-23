@@ -9,20 +9,25 @@ import time
 import os
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from websocket_handler import init_live_data_handler, get_live_data_handler
 from ai_assistant import get_ai_assistant
-from algo_engine import get_strategies, save_strategies, get_trade_log, add_trade_entry, run_backtest, start_engine, stop_engine, engine_state
+from algo_engine import (
+    get_strategies, save_strategies, get_trade_log, add_trade_entry,
+    run_backtest, start_engine, stop_engine, engine_state,
+    compute_max_pain_cpp, parallel_backtest,
+)
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-CONSUMER_KEY = "373e2f89-7c71-4665-be61-887c6aec0d68"
-MOBILE_NUMBER = "+918459857355"
-UCC = "W9VOM"
-MPIN = "123456"
+CONSUMER_KEY = os.getenv("CONSUMER_KEY", "b2196b8f-ac59-4b22-901a-2478a0d0d3a8")
+MOBILE_NUMBER = os.getenv("MOBILE_NUMBER", "+918459857355")
+UCC = os.getenv("UCC", "W9VOM")
+MPIN = os.getenv("MPIN", "123456")
 
 client = None
 session_data = None
@@ -424,6 +429,63 @@ def get_limits():
         return jsonify({
             'success': True,
             'limits': limits
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/batch', methods=['GET'])
+def batch_fetch():
+    """Fetch all trading data in parallel using thread pool."""
+    try:
+        if not client or not session_data:
+            return jsonify({'error': 'Not logged in'}), 401
+        results = {}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {
+                pool.submit(client.holdings): 'holdings',
+                pool.submit(client.order_report): 'orders',
+                pool.submit(client.positions): 'positions',
+                pool.submit(client.limits): 'limits',
+                pool.submit(client.trade_report): 'trades',
+            }
+            for fut in as_completed(futures):
+                key = futures[fut]
+                try:
+                    results[key] = fut.result()
+                except Exception as e:
+                    results[key] = {'error': str(e)}
+        # Compute live PnL from positions + limits
+        total_pnl = 0
+        avail_margin = 0
+        pos_data = results.get('positions', {})
+        pdata = pos_data.get('data', pos_data) if isinstance(pos_data, dict) else pos_data
+        if isinstance(pdata, list):
+            for p in pdata:
+                if isinstance(p, dict):
+                    total_pnl += float(p.get('pnl', p.get('pandl', 0)))
+        lim_data = results.get('limits', {})
+        ldata = lim_data.get('data', lim_data) if isinstance(lim_data, dict) else lim_data
+        if isinstance(ldata, dict):
+            avail_margin = float(ldata.get('availableCash', ldata.get('cash', ldata.get('availableMargin', 0))))
+        return jsonify({
+            'success': True,
+            'profile': {
+                'ucc': session_data.get('ucc'),
+                'name': session_data.get('greetingName'),
+                'clientType': session_data.get('clientType'),
+                'dataCenter': session_data.get('dataCenter'),
+                'dormancyStatus': session_data.get('dormancyStatus'),
+                'kId': session_data.get('kId'),
+                'isTrialAccount': session_data.get('isTrialAccount'),
+                'environment': session_data.get('_env', 'prod'),
+            },
+            'holdings': results.get('holdings'),
+            'orders': results.get('orders'),
+            'positions': results.get('positions'),
+            'limits': results.get('limits'),
+            'trades': results.get('trades'),
+            'total_pnl': round(total_pnl, 2),
+            'available_margin': avail_margin,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -942,22 +1004,11 @@ def get_option_chain():
                 entry['pe'] = dict(ltp=q.get('ltp', q.get('LTP', 0)), oi=oi, iv=q.get('iv', q.get('impliedVolatility', 0)), volume=q.get('volume', 0), chg=q.get('chg', q.get('change', 0)), bid=q.get('bid', q.get('bidPrice', 0)), ask=q.get('ask', q.get('askPrice', 0)))
             strikes.append(entry)
         pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 0
-        # Max Pain: find strike where total buyer loss is minimal
+        # Max Pain (C++ accelerated)
         max_pain = None
         if strikes:
-            losses = {}
-            for s in strikes:
-                loss = 0
-                sp = s['strike']
-                for o in strikes:
-                    if 'ce' in o:
-                        if o['strike'] <= sp:
-                            loss += o['ce']['oi'] * (sp - o['strike'])
-                    if 'pe' in o:
-                        if o['strike'] >= sp:
-                            loss += o['pe']['oi'] * (o['strike'] - sp)
-                losses[sp] = loss
-            max_pain = min(losses, key=losses.get)
+            mp, losses, _, _, _ = compute_max_pain_cpp(strikes)
+            max_pain = mp
         analysis = ""
         if ai_assistant:
             ctx = _build_ai_context()
@@ -991,34 +1042,216 @@ def live_pnl():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# Angel One SmartAPI token mapping for NSE stocks
+ANGEL_TOKEN_MAP = {
+    "ADANIENT": "25", "ADANIGAS": "6066", "ADANIGREEN": "3563",
+    "ADANIPORTS": "15083", "ADANIPOWER": "17388", "ADANITRANS": "10217",
+    "AXISBANK": "5900", "BAJAJFINSV": "16675", "BPCL": "526",
+    "CANBK": "10794", "DLF": "14732", "HAL": "2303",
+    "HCLTECH": "7229", "HDFCBANK": "1333", "HDFCLIFE": "467",
+    "HINDUNILVR": "1394", "ICICIBANK": "4963", "INDUSINDBK": "5258",
+    "INFY": "1594", "ITC": "1660", "KOTAKBANK": "1922",
+    "LT": "11483", "MARUTI": "10999", "NCC": "2319",
+    "NTPC": "11630", "ONGC": "2475", "RELIANCE": "2885",
+    "SBIN": "3045", "TATACOMM": "3721", "TATAPOWER": "3426",
+    "TATASTEEL": "3499", "TCS": "11536", "WIPRO": "3787"
+}
+
+_angel_client = None
+_angel_token = None
+_angel_feed_token = None
+
+def get_angel_client():
+    global _angel_client, _angel_token, _angel_feed_token
+    if _angel_client is not None:
+        return _angel_client
+    from dotenv import load_dotenv
+    angel_env = os.path.join(os.path.dirname(__file__), '.env.angel')
+    if os.path.exists(angel_env):
+        load_dotenv(angel_env, override=True)
+    api_key = os.getenv('ANGEL_API_KEY')
+    client_id = os.getenv('ANGEL_CLIENT_ID')
+    password = os.getenv('ANGEL_PASSWORD')
+    totp_secret = os.getenv('ANGEL_TOTP_SECRET')
+    if not all([api_key, client_id, password, totp_secret]):
+        return None
+    try:
+        from SmartApi import SmartConnect
+        import pyotp
+        totp = pyotp.TOTP(totp_secret).now()
+        client = SmartConnect(api_key=api_key)
+        data = client.generateSession(client_id, password, totp)
+        if not data.get('status'):
+            return None
+        _angel_token = data['data']['jwtToken']
+        _angel_feed_token = client.getfeedToken()
+        _angel_client = client
+        return _angel_client
+    except Exception:
+        _angel_client = None
+        return None
+
+ANGEL_INTERVAL_MAP = {
+    '1m': 'ONE_MINUTE', '3m': 'THREE_MINUTE', '5m': 'FIVE_MINUTE', '10m': 'TEN_MINUTE',
+    '15m': 'FIFTEEN_MINUTE', '30m': 'THIRTY_MINUTE', '1h': 'ONE_HOUR', '1d': 'ONE_DAY'
+}
+
+@app.route('/api/angel-quotes', methods=['GET'])
+def get_angel_quotes():
+    try:
+        tokens_str = request.args.get('tokens', '')
+        exchange = request.args.get('exchange', 'NSE').upper()
+        if not tokens_str:
+            return jsonify({'success': False, 'error': 'No tokens'}), 400
+
+        symbols = [s.strip().upper().replace('-EQ', '') for s in tokens_str.split(',') if s.strip()]
+        angel_tokens = []
+        symbol_map = {}
+        for s in symbols:
+            if s in ANGEL_TOKEN_MAP:
+                t = ANGEL_TOKEN_MAP[s]
+                angel_tokens.append(t)
+                symbol_map[t] = s
+
+        if not angel_tokens:
+            return jsonify({'success': False, 'error': 'No mapped Angel symbols'}), 404
+
+        client = get_angel_client()
+        if not client:
+            return jsonify({'success': False, 'error': 'Angel client unavailable'}), 500
+
+        resp = client.getMarketData("FULL", {exchange: angel_tokens})
+        if not resp.get("status") or not resp.get("data"):
+            return jsonify({'success': False, 'error': 'No data from Angel'}), 502
+
+        quotes = {}
+        fetched = resp["data"].get("fetched", []) or []
+        for item in fetched:
+            tok = str(item.get("symbolToken", ""))
+            sym = symbol_map.get(tok, "")
+            if not sym:
+                continue
+            ltp = float(item.get("ltp", 0) or 0)
+            open_p = float(item.get("open", 0) or 0)
+            high = float(item.get("high", 0) or 0)
+            low = float(item.get("low", 0) or 0)
+            volume = int(item.get("volume", 0) or 0)
+            oi = int(item.get("openInterest", 0) or 0)
+            chg = float(item.get("change", 0) or 0)
+            pct = float(item.get("percentageChange", 0) or 0)
+            close = float(item.get("close", ltp) or ltp)
+
+            quotes[sym] = {
+                'ltp': ltp,
+                'open': open_p,
+                'high': high,
+                'low': low,
+                'close': close,
+                'volume': volume,
+                'openInterest': oi,
+                'change': chg,
+                'percentageChange': pct
+            }
+
+        return jsonify({'success': True, 'quotes': {'data': quotes}, 'source': 'angel'})
+
+    except Exception as e:
+        print('[angel-quotes error]', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/historical', methods=['GET'])
 def get_historical():
+    symbol = request.args.get('symbol', 'SBIN.NS')
+    interval = request.args.get('interval', '1d')
+    period = request.args.get('period', '1mo')
+    exchange = request.args.get('exchange', 'NSE').upper()
+    fromdate = request.args.get('fromdate', '')
+    todate = request.args.get('todate', '')
+    raw_symbol = symbol
+    symbol = symbol.upper().replace('-EQ', '')
+
+    index_map = {'NIFTY': '^NSEI', 'NIFTY50': '^NSEI', 'BANKNIFTY': '^NSEBANK', 'SENSEX': '^BSESN'}
+    if symbol in index_map:
+        symbol = index_map[symbol]
+        return _fetch_yahoo_historical(symbol, interval, period)
+    if symbol.endswith('.BO') or symbol.startswith('^'):
+        return _fetch_yahoo_historical(symbol, interval, period)
+
+    base = symbol.replace('.NS', '')
+    angel_interval = ANGEL_INTERVAL_MAP.get(interval)
+    period_days = {'5d': 7, '1mo': 30, '3mo': 90, '6mo': 180, '1y': 365}
+    days = period_days.get(period, 30)
+
+    if angel_interval and base in ANGEL_TOKEN_MAP:
+        try:
+            client = get_angel_client()
+            if client:
+                token = ANGEL_TOKEN_MAP[base]
+                if fromdate and todate:
+                    to_dt = datetime.strptime(todate, '%Y-%m-%d') + timedelta(days=1)
+                    from_dt = datetime.strptime(fromdate, '%Y-%m-%d')
+                else:
+                    to_dt = datetime.now()
+                    from_dt = to_dt - timedelta(days=days)
+                params = {
+                    "exchange": exchange,
+                    "symboltoken": token,
+                    "interval": angel_interval,
+                    "fromdate": from_dt.strftime("%Y-%m-%d %H:%M"),
+                    "todate": to_dt.strftime("%Y-%m-%d %H:%M")
+                }
+                candles = client.getCandleData(params)
+                if candles.get("status") and candles.get("data"):
+                    records = []
+                    for c in candles["data"]:
+                        records.append({
+                            'timestamp': str(pd.Timestamp(c[0])),
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': int(float(c[5]))
+                        })
+                    return jsonify({'success': True, 'symbol': raw_symbol, 'interval': interval, 'data': records, 'source': 'angel'})
+        except Exception:
+            pass
+
+    return _fetch_yahoo_historical(symbol if symbol.startswith('^') else symbol + '.NS', interval, period)
+
+def _fetch_yahoo_historical(symbol, interval, period):
+    from curl_cffi import requests as curl_req
+    period_days = {'5d': 7, '1mo': 30, '3mo': 90, '6mo': 180, '1y': 365, '2y': 730, '5y': 1825}
+    days = period_days.get(period, 30)
+    yf_range = 'max'
+    if days <= 7: yf_range = '5d'
+    elif days <= 30: yf_range = '1mo'
+    elif days <= 90: yf_range = '3mo'
+    elif days <= 180: yf_range = '6mo'
+    elif days <= 365: yf_range = '1y'
+    elif days <= 730: yf_range = '2y'
     try:
-        import yfinance as yf
-        symbol = request.args.get('symbol', 'SBIN.NS')
-        interval = request.args.get('interval', '1d')
-        period = request.args.get('period', '1mo')
-        symbol = symbol.upper().replace('-EQ', '')
-        if not symbol.endswith('.NS') and not symbol.endswith('.BO'):
-            symbol = symbol + '.NS'
-        df = yf.download(tickers=symbol, period=period, interval=interval, progress=False)
-        if df.empty:
+        url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={yf_range}'
+        r = curl_req.get(url, impersonate='chrome120', timeout=15)
+        if r.status_code != 200:
             return jsonify({'success': False, 'error': 'No data for ' + symbol}), 404
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.reset_index()
+        data = r.json()
+        result = data.get('chart', {}).get('result', [None])[0]
+        if not result:
+            return jsonify({'success': False, 'error': 'No data for ' + symbol}), 404
+        timestamps = result.get('timestamp', [])
+        quotes = result.get('indicators', {}).get('quote', [{}])[0]
+        if not timestamps:
+            return jsonify({'success': False, 'error': 'No data for ' + symbol}), 404
         records = []
-        for _, row in df.iterrows():
-            ts = row['Date' if 'Date' in df.columns else 'Datetime']
-            if hasattr(ts, 'isoformat'):
-                ts = ts.isoformat()
+        for i in range(len(timestamps)):
             records.append({
-                'timestamp': str(ts),
-                'open': float(row.get('Open', 0)),
-                'high': float(row.get('High', 0)),
-                'low': float(row.get('Low', 0)),
-                'close': float(row.get('Close', 0)),
-                'volume': int(row.get('Volume', 0))
+                'timestamp': datetime.fromtimestamp(timestamps[i], tz=timezone.utc).isoformat(),
+                'open': float(quotes.get('open', [0])[i] or 0),
+                'high': float(quotes.get('high', [0])[i] or 0),
+                'low': float(quotes.get('low', [0])[i] or 0),
+                'close': float(quotes.get('close', [0])[i] or 0),
+                'volume': int(quotes.get('volume', [0])[i] or 0)
             })
         return jsonify({'success': True, 'symbol': symbol, 'interval': interval, 'data': records})
     except Exception as e:
@@ -1147,6 +1380,103 @@ def algo_clear_logs():
     save_trade_log([])
     return jsonify({'success': True})
 
+# ============= TRADE JOURNAL =============
+JOURNAL_FILE = 'trade_journal.json'
+
+def _load_journal():
+    try:
+        with open(JOURNAL_FILE) as f:
+            return json.load(f)
+    except:
+        return []
+
+def _save_journal(trades):
+    with open(JOURNAL_FILE, 'w') as f:
+        json.dump(trades, f, indent=2)
+
+_journal_id_counter = [int(time.time() * 1000)]
+
+def _next_jid():
+    _journal_id_counter[0] += 1
+    return _journal_id_counter[0]
+
+@app.route('/api/trade-journal', methods=['GET', 'POST'])
+def trade_journal():
+    if request.method == 'GET':
+        return jsonify({'success': True, 'trades': _load_journal()})
+    data = request.json
+    trades = _load_journal()
+    if data.get('id'):
+        for i, t in enumerate(trades):
+            if t.get('id') == data['id']:
+                trades[i] = data
+                break
+    else:
+        data['id'] = _next_jid()
+        trades.append(data)
+    _save_journal(trades)
+    return jsonify({'success': True, 'trade': data})
+
+@app.route('/api/trade-journal/<int:jid>', methods=['DELETE'])
+def trade_journal_delete(jid):
+    trades = _load_journal()
+    trades = [t for t in trades if t.get('id') != jid]
+    _save_journal(trades)
+    return jsonify({'success': True})
+
+@app.route('/api/trade-journal/clear', methods=['POST'])
+def trade_journal_clear():
+    _save_journal([])
+    return jsonify({'success': True})
+
+@app.route('/api/trade-journal/fetch-executed', methods=['POST'])
+def trade_journal_fetch():
+    added = 0
+    if not client or not session_data:
+        return jsonify({'success': False, 'error': 'Not logged in'}), 401
+    try:
+        raw = client.trade_report()
+        data = raw.get('data', raw) if isinstance(raw, dict) else raw
+        existing = _load_journal()
+        existing_symbols = set()
+        for t in existing:
+            if t.get('symbol') and t.get('entry') and t.get('date'):
+                existing_symbols.add((t['symbol'], t['entry'], t['date']))
+        if isinstance(data, list):
+            for t in data:
+                sym = t.get('tradingSymbol', t.get('sym', '')).replace('-EQ', '')
+                price = float(t.get('avgPrice', t.get('flPrc', 0)))
+                date = (t.get('tradeTime', t.get('fillTime', '')) or '')[:10]
+                qty = int(float(t.get('flBuyQty', t.get('flSellQty', '0'))))
+                side = 'BUY' if float(t.get('flBuyQty', '0')) > 0 else 'SELL'
+                prod = t.get('product', '')
+                key = (sym, price, date)
+                if key in existing_symbols:
+                    continue
+                existing.append({
+                    'id': _next_jid(),
+                    'symbol': sym,
+                    'side': side,
+                    'entry': price,
+                    'exit': None,
+                    'qty': qty,
+                    'product': prod,
+                    'date': date,
+                    'fees': 0,
+                    'sl': None,
+                    'target': None,
+                    'tags': 'broker',
+                    'notes': 'Imported from broker trade report',
+                    'source': 'broker',
+                })
+                existing_symbols.add(key)
+                added += 1
+        if added > 0:
+            _save_journal(existing)
+        return jsonify({'success': True, 'count': added, 'message': f'Imported {added} new trades from broker'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/algo/backtest', methods=['POST'])
 def algo_backtest():
     data = request.json
@@ -1154,10 +1484,54 @@ def algo_backtest():
     symbol = data.get('symbol', '')
     interval = data.get('interval', '1h')
     period = data.get('period', '60d')
+    fromdate = data.get('fromdate', '')
+    todate = data.get('todate', '')
+    exchange = data.get('exchange', 'NSE')
     if not strategy or not symbol:
         return jsonify({'error': 'Strategy and symbol required'}), 400
-    result = run_backtest(strategy, symbol, interval, period)
+    result = run_backtest(strategy, symbol, interval, period, fromdate or None, todate or None, exchange)
     return jsonify({'success': True, 'result': result})
+
+@app.route('/api/algo/execute-signal', methods=['POST'])
+def algo_execute_signal():
+    try:
+        if not client or not session_data:
+            return jsonify({'error': 'Not logged in'}), 401
+        if kill_switch_active:
+            return jsonify({'error': 'Kill switch is ON', 'kill_switch_blocked': True}), 403
+        data = request.json
+        symbol = data.get('symbol', '').replace('.NS', '').replace('-EQ', '')
+        action = data.get('action', 'BUY')
+        qty = int(data.get('qty', 1))
+        price = data.get('price', '0')
+        sl = data.get('stop_loss', 0)
+        target = data.get('target', 0)
+        product = data.get('product', 'MIS')
+        if not symbol:
+            return jsonify({'error': 'Symbol required'}), 400
+        tx_type = 'BUY' if 'BUY' in action.upper() else 'SELL'
+        trading_symbol = symbol + '-EQ'
+        order_kwargs = dict(
+            exchange_segment='nse_cm',
+            product=product,
+            price='0',
+            order_type='MKT',
+            quantity=str(qty),
+            validity='DAY',
+            trading_symbol=trading_symbol,
+            transaction_type='B' if tx_type == 'BUY' else 'S',
+            amo='NO',
+            disclosed_quantity='0',
+            market_protection='0',
+            pf='N',
+            trigger_price='0',
+        )
+        res = client.place_order(**order_kwargs)
+        from algo_engine import add_trade_entry
+        add_trade_entry({'symbol': symbol, 'action': f'{tx_type}_LIVE', 'price': float(price) if price else 0, 'qty': qty, 'sl': sl, 'target': target, 'response': str(res)[:200]})
+        return jsonify({'success': True, 'order': str(res)[:500], 'symbol': symbol, 'action': tx_type, 'qty': qty})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ============= NSE Option Chain (Public API) =============
 NSE_HEADERS = {
@@ -1290,23 +1664,15 @@ def nse_option_chain():
 
         pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 0
 
-        # Max Pain
+        # Max Pain (C++ accelerated)
         max_pain = None
         if strikes:
-            losses = {}
-            for s_ in strikes:
-                sp = s_["strike"]
-                loss = 0
-                for o_ in strikes:
-                    if "ce" in o_ and o_["strike"] <= sp:
-                        loss += o_["ce"]["oi"] * (sp - o_["strike"])
-                    if "pe" in o_ and o_["strike"] >= sp:
-                        loss += o_["pe"]["oi"] * (o_["strike"] - sp)
-                losses[sp] = loss
-            max_pain = min(losses, key=losses.get)
+            mp, losses, _, _, _ = compute_max_pain_cpp(strikes)
+            max_pain = mp
 
+        do_ai = request.args.get('ai') == '1'
         ai_analysis = ""
-        if ai_assistant and underlying_value and strikes:
+        if do_ai and ai_assistant and underlying_value and strikes:
             try:
                 uv = float(underlying_value)
                 sorted_ce = [s for s in strikes if "ce" in s and s["ce"].get("oi", 0) > 0]
