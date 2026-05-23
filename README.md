@@ -1,8 +1,8 @@
 # Kotak Neo AI Algo Trading Terminal
 
-A full-stack algorithmic trading terminal for Kotak Neo Securities with AI-powered analysis, NSE public option chain data, real-time risk management, and automated strategy execution.
+A full-stack algorithmic trading terminal for Kotak Neo Securities with AI-powered analysis, NSE public option chain data, real-time risk management, automated strategy execution, and a premium institutional-grade UI.
 
-Built with Flask + vanilla JS — no frontend framework, no build step. Dark terminal-style UI with glassmorphism effects, mobile responsive sidebar, and real-time data streaming.
+Built with Flask + vanilla JS — no frontend framework, no build step. Premium dark glassmorphism UI with CSS custom properties, mobile responsive sidebar, and real-time data streaming.
 
 ---
 
@@ -20,6 +20,8 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 - [Risk Management](#risk-management)
 - [Technical Indicators & Charts](#technical-indicators--charts)
 - [Kotak Neo API Integration](#kotak-neo-api-integration)
+- [Angel One Data Source](#angel-one-data-source)
+- [Alerts System](#alerts-system)
 - [Telegram Alerts](#telegram-alerts)
 - [Deployment](#deployment)
 - [API Reference](#api-reference)
@@ -35,6 +37,15 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 - Portfolio summary with day change, MTM, and exposure
 - Kill switch (one-click emergency stop)
 - Quick-access stats cards
+
+### 🎨 Premium UI (Neo Institutional Dark)
+- Dark glassmorphism design with `#040B14` background
+- `--bg-panel`, `--bg-card`, `--text-secondary/muted/disabled`, `--border-hover` CSS variable system
+- `backdrop-filter: blur(16px)` glass cards
+- Gradient primary buttons (`#00FFC6` → `#00B8FF`)
+- Radial ambient background gradients
+- Inter + JetBrains Mono font stack
+- Refined tables, inputs, scrollbars, chart containers
 
 ### 📈 Market Data
 - **Quotes**: Live LTP, volume, bid/ask, change for any symbol
@@ -68,13 +79,23 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 - **Option Chain Analysis**: Detailed bias, OI clustering, IV skew, support/resistance, strategy recommendations
 
 ### 🔄 Algo Trading Engine
-- **Background thread** evaluates strategies every 60 seconds
-- **Strategy Builder**: Create strategies with buy/sell conditions
-- **14 Condition Types**: EMA crossover, RSI, MACD, Bollinger Bands, SuperTrend, volume spike, VWAP, and more
-- **4 Pre-built Templates**: EMA Crossover, RSI Mean Reversion, Bollinger Squeeze, MACD Crossover
-- **Backtesting**: Run strategies against historical yfinance data (win rate, PnL, trade log)
+- **Background loop** evaluates strategies at per-strategy interval (1m–1d)
+- **Strategy Builder**: 4-condition model — Entry Long, Exit Long, Entry Short, Exit Short
+- **12 Condition Types**: EMA crossover, RSI, MACD, Bollinger Bands, SuperTrend, volume spike, VWAP, price vs EMA
+- **6 Pre-built Templates**: EMA Crossover, RSI Mean Reversion, Bollinger Squeeze, MACD Crossover, SuperTrend Long Only, VWAP+EMA Long Only
+- **Customizable indicator params**: period, fast/slow periods, value thresholds — displayed as JSON tags
+- **Per-strategy interval**: Each strategy runs at its own 1m/3m/5m/15m/30m/1h/1d interval
+- **Long + Short sides**: Separate entry/exit conditions for both directions
+- **Backtesting**: Run strategies against historical Angel One + yfinance data (win rate, PnL, trade log)
 - **Live Execution**: Auto-place orders via Kotak Neo API when conditions trigger
+- **Copy to Live Trade**: Execute paper-trade signals as real orders
 - **Kill Switch**: Instantly cancel all orders and block new ones
+
+### 🔔 Alerts System
+- **Independent alert checker**: Runs every 30s, fetches LTP from Angel One regardless of watchlist state
+- **Price alerts**: Above/below conditions with symbol matching (handles `-EQ` suffix)
+- **Sound alerts**: Two-tone chime (C5→E5) via Web Audio API, 15% gain, autoplay-safe
+- **Browser notifications**: Desktop Notification API integration
 
 ### ⚠️ Risk Management
 - Daily loss limit (auto-stop trading)
@@ -84,11 +105,6 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 - AI risk advisor for portfolio-level risk analysis
 - Visual risk bar showing loss limit utilization
 
-### 📱 Alerts & Telegram
-- Price alerts with browser Notification API
-- Telegram bot integration for remote notifications
-- Configurable bot token and chat ID
-
 ---
 
 ## Tech Stack
@@ -97,16 +113,18 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 |-------|-----------|
 | **Backend** | Python 3.13, Flask, Flask-SocketIO |
 | **Frontend** | Vanilla JavaScript, HTML5, CSS3 |
-| **UI Theme** | Dark terminal with glassmorphism, CSS variables |
+| **UI Theme** | Neo Institutional Dark — glassmorphism, CSS custom properties |
 | **Charts** | Lightweight Charts (TradingView) via CDN |
-| **AI** | Groq Responses API (`openai/gpt-oss-20b`) |
+| **AI** | Groq API (`openai/gpt-oss-20b`) |
 | **Broker** | Kotak Neo API v2 SDK (`neo_api_client`) |
-| **Historical Data** | yfinance (free, zero auth) |
+| **Historical Data** | Angel One SmartAPI (primary) + yfinance (fallback) |
+| **Live LTP** | Angel One SmartAPI REST quotes |
 | **Option Chain** | NSE Public API (free, cookie-based session) |
 | **Auth** | TOTP via `pyotp` |
-| **Notifications** | Telegram Bot API + Browser Notification API |
+| **Notifications** | Telegram Bot API + Web Audio API + Browser Notification API |
 | **Data Storage** | JSON files (strategies, trade logs) |
 | **Real-time** | Flask-SocketIO (WebSocket) |
+| **Indicators** | C++ accelerated module (`algo_core`) + Python fallback |
 
 ---
 
@@ -114,14 +132,16 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 
 ```
 📁 Kotak-Neo-Algo/
-├── 📄 app.py                       # Flask app — 56+ API routes
-├── 📄 algo_engine.py               # Strategy engine, backtesting, indicators
+├── 📄 app.py                       # Flask app — 57+ API routes
+├── 📄 algo_engine.py               # Strategy engine, backtesting, indicators, Angel One data
 ├── 📄 ai_assistant.py              # Groq AI integration (TradingAIAssistant)
 ├── 📄 websocket_handler.py         # WebSocket live data handler stub
 ├── 📁 templates/
-│   └── 📄 index.html              # Single-page UI (~2850 lines)
+│   └── 📄 index.html              # Single-page UI (~4000 lines)
 ├── 📁 sensibull-bridge/            # Sensibull data bridge (experimental)
-├── 📄 .env                         # Credentials (gitignored)
+├── 📁 algo_core/                   # C++ accelerated indicator module
+├── 📄 .env                         # Kotak Neo credentials (gitignored)
+├── 📄 .env.angel                   # Angel One SmartAPI credentials (gitignored)
 ├── 📄 .gitignore
 ├── 📄 README.md
 ├── 📄 requirements.txt             # Python dependencies
@@ -134,7 +154,8 @@ Built with Flask + vanilla JS — no frontend framework, no build step. Dark ter
 ├── 📄 test_trade.py                # Basic order placement test
 ├── 📄 test_trade_token.py          # Token-based auth test
 ├── 📄 trade_raw.py                 # Raw HTTP order placement test
-└── 📄 test_angel_historical.py     # Angel One historical data test (deprecated)
+├── 📄 prefetch_market_data.py      # Pre-fetch historical data script
+└── 📄 test_angel_historical.py     # Angel One historical data test
 ```
 
 ---
@@ -156,7 +177,8 @@ pip install -r requirements.txt
 
 # 4. Configure environment
 cp .env.example .env
-# Edit .env with your credentials (see Configuration section)
+# Edit .env with your Kotak Neo credentials
+# Create .env.angel with your Angel One SmartAPI credentials
 
 # 5. Run the server
 python app.py
@@ -184,9 +206,15 @@ MPIN=123456
 # === Telegram (optional — for alerts) ===
 TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_CHAT_ID=123456789
+```
 
-# === Kotak Neo TOTP Secret (optional — for auto-login) ===
-TOTP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxx
+Create a `.env.angel` file for Angel One SmartAPI (used for historical data + live LTP):
+
+```env
+ANGEL_API_KEY=your_api_key
+ANGEL_CLIENT_ID=your_client_id
+ANGEL_PASSWORD=your_password
+ANGEL_TOTP_SECRET=your_totp_secret
 ```
 
 ### Getting Credentials
@@ -196,11 +224,12 @@ TOTP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxx
 3. **MOBILE_NUMBER**: Your registered Kotak Neo mobile number with country code
 4. **UCC**: Your Kotak Neo trading ID
 5. **MPIN**: Your Kotak Neo MPIN (used for session validation)
-6. **TELEGRAM**: Create bot via [@BotFather](https://t.me/BotFather) on Telegram, get chat ID from [@userinfobot](https://t.me/userinfobot)
+6. **ANGEL_API_KEY**: Generate at [Angel One SmartAPI](https://smartapi.angelbroking.com)
+7. **TELEGRAM**: Create bot via [@BotFather](https://t.me/BotFather) on Telegram, get chat ID from [@userinfobot](https://t.me/userinfobot)
 
 ### IP Whitelisting
 
-Kotak Neo requires your public IP to be whitelisted. Run:
+Kotak Neo requires your public IP to be whitelisted:
 
 ```bash
 curl ifconfig.me
@@ -229,12 +258,10 @@ Add the returned IP at [Kotak Neo Dashboard](https://neo.kotaksecurities.com) �
 - **Mode selector**: Indices (dropdown) / Stocks (text input with autocomplete)
 - **Symbol selection**: Indices from NSE, stocks with 200+ autocomplete options
 - **Expiry dropdown**: Auto-populated from NSE API, defaults to weekly near
-- **Underlying value** display with separator line
 - **Stats cards**: PCR, Max Pain, Total CE OI, Total PE OI
 - **Full 17-column table** with CE/PE side-by-side
-- **Auto-refresh toggle**: 3-second polling for live updates
+- **Auto-refresh toggle**: 3-second polling
 - **AI Analyze button**: Sends top OTM strikes to Groq for detailed analysis
-- **AI Analysis Panel**: Market bias, OI concentration, IV skew, S/R levels, strategies
 
 ### 4. Watchlist (`page-watchlist`)
 - User-managed watchlist stored in localStorage
@@ -243,60 +270,53 @@ Add the returned IP at [Kotak Neo Dashboard](https://neo.kotaksecurities.com) �
 - Color-coded change indicators
 
 ### 5. Market Data (`page-market-data`)
-- **Quotes tab**: Fetch live LTP, bid/ask, volume, change for any token
+- **Quotes tab**: Live LTP, bid/ask, volume, change
 - **Scrip Master tab**: Browse all instruments with search
 - **Funds & Limits tab**: View margin, cash, adhoc limits
 - **Technical Indicators card**:
   - Symbol + interval + period selector
   - RSI, MACD, EMA 20/50 crossover signal, Bollinger Band position
-  - SuperTrend direction, VWAP, ATR
-  - Day change calculation
-  - **Interactive Candlestick Chart** with volume histogram
-  - **EMA 20/50 overlay** on chart
-  - **Ichimoku Cloud**: Tenkan/Kijun lines + Senkou Span A/B
-  - **Fibonacci levels**: 0, 23.6, 38.2, 50, 61.8, 78.6, 100%
+  - Interactive candlestick chart with volume, EMA overlay, Ichimoku Cloud, Fibonacci levels
 
 ### 6. AI Tools (`page-ai-tools`)
 - **AI Chat**: Free-form trading questions with context awareness
-- **Market Analysis**: Submit symbol + timeframe for AI-powered analysis
-- **Strategy Generation**: AI creates custom trading strategy based on your inputs
-- **Risk Assessment**: AI evaluates portfolio risk
-- **Trade Journal**: Paste trade data for AI review (identifies mistakes, patterns, improvements)
+- **Market Analysis**: Submit symbol + timeframe for AI analysis
+- **Strategy Generation**: AI creates custom trading strategies
+- **Risk Assessment**: Portfolio risk evaluation
+- **Trade Journal**: Paste trade data for AI review
 - **Sentiment Analysis**: AI reads market mood
 
 ### 7. Alerts (`page-alerts`)
 - Set price alerts (above/below conditions)
+- Independent LTP fetcher (Angel One REST, 30s interval)
+- Sound alerts via Web Audio API (two-tone chime)
 - Desktop notifications via browser Notification API
 - Telegram bot integration
-- Test Telegram button
 - Active alerts list with remove functionality
 
 ### 8. Algo Trading (`page-algo`)
-- **Strategies list**: All saved strategies with enable/disable toggle
-- **Strategy Builder**: Create/edit strategies with:
-  - Symbol, quantity, product type
-  - Multiple buy conditions (AND logic)
-  - Multiple sell conditions (AND logic)
-  - Stop loss % and target %
-  - 4 pre-built templates (one-click load)
-- **Backtest**: Run strategy against historical data, view:
-  - Total trades, wins, losses, win rate
-  - Total PnL %, average PnL %
-  - Trade-by-trade breakdown
-  - Signals timeline
-- **Live Trading**: Enabled strategies auto-execute via background engine
-- **Engine Controls**: Start/stop engine, view status
+- **Strategy builder**: 4-condition model with long/short panels
+  - Entry Long / Exit Long (green bordered panel)
+  - Entry Short / Exit Short (red bordered panel)
+  - Per-strategy interval selector (1m–1d)
+  - Customizable indicator parameters with JSON tag display
+  - 6 pre-built templates
+- **Strategies list**: All saved strategies with L→E S→E summary
+- **Backtest**: Run against historical data (Angel One + yfinance) with:
+  - Exchange (NSE/BSE), from/to date selectors
+  - Trade table with Side column (long/short)
+  - Win rate, P&L, signals
+- **Live Trading**: Enabled strategies auto-execute at their configured interval
+- **Signal Panel**: Latest signal with Copy to Live Trade button
 - **Trade Log**: All engine-generated trades with action, symbol, price, quantity
 
 ### 9. Risk Management (`page-risk-management`)
 - Enable/disable risk management
-- Daily loss limit (₹)
-- Max trades per day
-- Max position size (₹)
-- **AI Risk Advisor**: Get AI-powered risk analysis
-- **Portfolio Risk Scan**: Full portfolio risk assessment
-- **Kill Switch**: Emergency stop
-- **Risk Status Panel**: Today's trades, P&L, loss limit bar
+- Daily loss limit, max trades, max position size
+- AI Risk Advisor
+- Portfolio Risk Scan
+- Kill Switch
+- Risk Status Panel
 
 ---
 
@@ -304,7 +324,7 @@ Add the returned IP at [Kotak Neo Dashboard](https://neo.kotaksecurities.com) �
 
 ### How It Works
 
-The NSE option chain uses a `requests.Session()` with browser-like headers to access NSE's public APIs — **no API key needed**.
+The NSE option chain uses a `requests.Session()` with browser-like headers — **no API key needed**.
 
 ### Session Initialization
 
@@ -314,51 +334,26 @@ s.headers.update({
     "user-agent": "Mozilla/5.0 ...",
     "accept-language": "en,gu;q=0.9,hi;q=0.8",
 })
-s.get("https://www.nseindia.com/option-chain")  # Gets cookies
+s.get("https://www.nseindia.com/option-chain")
 ```
 
 ### API Calls
 
 1. **Symbols**: `GET https://www.nseindia.com/api/underlying-information`
-   - Returns indices (NIFTY, BANKNIFTY, etc.) + 200+ stocks
 2. **Expiry Dates**: `GET https://www.nseindia.com/api/option-chain-contract-info?symbol={symbol}`
 3. **Option Chain**: `GET https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol={symbol}&expiry={date}`
-
-### Response Fields (per strike)
-
-| Field | Description |
-|-------|-------------|
-| `strike` | Strike price |
-| `ce.ltp` | Call LTP |
-| `ce.oi` | Call Open Interest |
-| `ce.chg_oi` | Change in OI |
-| `ce.iv` | Implied Volatility |
-| `ce.volume` | Total traded volume |
-| `ce.bid` | Bid price |
-| `ce.ask` | Ask price |
-| `ce.change` | Price change |
-| `pe.*` | Same fields for Puts |
 
 ### Max Pain Calculation
 
 ```python
-for each strike S:
+for strike S:
     loss = 0
-    for each strike O:
-        if O is CE and O.strike <= S:
-            loss += O.oi * (S - O.strike)
-        if O is PE and O.strike >= S:
-            loss += O.oi * (O.strike - S)
+    for strike O:
+        if O is CE and O.strike <= S: loss += O.oi * (S - O.strike)
+        if O is PE and O.strike >= S: loss += O.oi * (O.strike - S)
     losses[S] = loss
 max_pain = strike with minimum loss
 ```
-
-### AI Analysis Prompt
-
-Sends top 8 OTM calls (strike ≥ UV) and top 8 OTM puts (strike ≤ UV) to Groq with:
-- Strike, LTP, OI, OI Change, OI Concentration %, IV, Volume, Bid, Ask, Change
-- IV skew (difference between far OTM call IV and near put IV)
-- Asks for: market bias, PCR interpretation, OI concentration, IV analysis, S/R levels, strategies
 
 ---
 
@@ -368,44 +363,19 @@ Sends top 8 OTM calls (strike ≥ UV) and top 8 OTM puts (strike ≤ UV) to Groq
 
 ```
 TradingAIAssistant
-├── __init__()              # Initialize Groq client or MockClient
-├── chat_query()            # Main chat with conversation history
-├── _generate_response()    # Core Groq API call wrapper
-│
-├── analyze_market_data()   # Market analysis
+├── chat_query()                 # Main chat with conversation history
+├── analyze_market_data()        # Market analysis
 ├── generate_trading_strategy()  # Strategy creation
-├── risk_assessment()       # Portfolio risk evaluation
-├── market_sentiment_analysis()  # Sentiment reading
-├── option_chain_analysis() # Options data analysis
-├── trade_decision()        # Trade execution evaluation
-├── analyze_trades()        # Trade journal review
-│
-├── clear_conversation_history()
-└── health_check()
+├── risk_assessment()            # Portfolio risk evaluation
+├── market_sentiment_analysis()  # Sentiment
+├── option_chain_analysis()      # Options data analysis
+├── trade_decision()             # Trade evaluation
+├── analyze_trades()             # Trade journal review
 ```
 
-### Model & Configuration
-
-- **Model**: `openai/gpt-oss-20b` (via Groq)
-- **API Endpoint**: `https://api.groq.com/openai/v1`
-- **Temperature**: 0.4–0.7 (varies by task)
-- **Max Tokens**: 1000–1500
-
-### Rate Limit Handling
-
-The Groq free tier has:
-- **8000 Tokens Per Minute (TPM)**
-- **200K Tokens Per Day (TPD)**
-
-To stay within limits:
-- Compact prompt formatting (pipe-delimited instead of JSON)
-- Only 5–8 strikes per side (not full chain)
-- Conversation history cleared before one-shot analyses
-- System prompt kept minimal
-
-### Mock Mode
-
-If `GROQ_API_KEY` is not set, the AI falls back to `MockClient` which returns canned responses — useful for UI development without API access.
+- **Model**: `openai/gpt-oss-20b` (via Groq), temp 0.4–0.7
+- **Rate limits**: 8000 TPM, 200K TPD free tier
+- **Mock mode**: Falls back to canned responses if `GROQ_API_KEY` unset
 
 ---
 
@@ -419,128 +389,162 @@ Background Thread (daemon=True)
     └── Every 60 seconds:
         1. Load all enabled strategies from JSON
         2. For each strategy:
-            a. Fetch latest data via yfinance
-            b. Compute indicators (EMA, RSI, MACD, BB, SuperTrend, VWAP, ATR)
-            c. Evaluate BUY conditions (AND logic)
-            d. Evaluate SELL conditions (AND logic)
-            e. Check stop loss / target
-            f. Place order via NeoAPI if triggered
-            g. Log trade
+            a. Fetch data at strategy's configured interval (1m–1d)
+            b. Compute indicators (EMA, RSI, MACD, BB, SuperTrend, VWAP, etc.)
+            c. Evaluate 4 condition groups:
+               - Entry Long (AND logic)
+               - Exit Long (AND logic)
+               - Entry Short (AND logic)
+               - Exit Short (AND logic)
+            d. Track positions in engine_state['positions']
+            e. Place order via NeoAPI if kill switch is OFF
+            f. Log entry as BUY_SIGNAL/SELL_SIGNAL if kill switch is ON (paper mode)
         3. Sleep 60 seconds
 ```
 
-### 14 Condition Types
+### 12 Condition Types
 
-| Tag | Logic |
-|-----|-------|
-| `price_above_ema` | Close > EMA(current) |
-| `price_below_ema` | Close < EMA(current) |
-| `ema_cross_above` | Previous EMA12 <= EMA26 AND Current EMA12 > EMA26 |
-| `ema_cross_below` | Previous EMA12 >= EMA26 AND Current EMA12 < EMA26 |
-| `rsi_above` | RSI > threshold |
-| `rsi_below` | RSI < threshold |
-| `macd_cross_above` | MACD line crosses above signal |
-| `macd_cross_below` | MACD line crosses below signal |
-| `price_above_bb_upper` | Close > Bollinger Upper Band |
-| `price_below_bb_lower` | Close < Bollinger Lower Band |
-| `supertrend_up` | SuperTrend trend == 1 (uptrend) |
-| `supertrend_down` | SuperTrend trend == -1 (downtrend) |
-| `volume_spike` | Volume > avg_volume * multiplier |
-| `price_above_vwap` | Close > VWAP |
+| Tag | Logic | Param |
+|-----|-------|-------|
+| `price_above_ema` | Close > EMA | `period` (default 9) |
+| `price_below_ema` | Close < EMA | `period` (default 9) |
+| `ema_cross_above` | EMA fast crosses above EMA slow | `fast_period`, `slow_period` |
+| `ema_cross_below` | EMA fast crosses below EMA slow | `fast_period`, `slow_period` |
+| `rsi_above` | RSI > threshold | `period`, `value` |
+| `rsi_below` | RSI < threshold | `period`, `value` |
+| `macd_cross_above` | MACD crosses above signal | `fast_period`, `slow_period` |
+| `macd_cross_below` | MACD crosses below signal | `fast_period`, `slow_period` |
+| `price_above_bb_upper` | Close > BB upper band | `period` |
+| `price_below_bb_lower` | Close < BB lower band | `period` |
+| `supertrend_buy` | SuperTrend flips to uptrend | `period`, `value` (multiplier) |
+| `supertrend_sell` | SuperTrend flips to downtrend | `period`, `value` (multiplier) |
+| `volume_spike` | Volume > avg * multiplier | `value` (multiplier) |
+| `price_above_vwap` | Close > VWAP | — |
+| `price_below_vwap` | Close < VWAP | — |
 
-### Strategy Templates
+### Strategy Templates (6)
 
-1. **EMA 12/26 Crossover**: Buy on golden cross, sell on death cross
-2. **RSI Mean Reversion**: Buy when oversold (≤30), sell when overbought (≥70)
-3. **Bollinger Squeeze Breakout**: Buy above upper band, sell below lower band
-4. **MACD Crossover**: Buy on MACD signal cross above, sell on cross below
+| Template | Long Entry | Long Exit | Short Entry | Short Exit | Interval |
+|----------|-----------|-----------|-------------|------------|----------|
+| **EMA 12/26 Crossover** | EMA12 × EMA26 ↑ | EMA12 × EMA26 ↓ | EMA12 × EMA26 ↓ | EMA12 × EMA26 ↑ | 15m |
+| **RSI Mean Reversion** | RSI ≤ 30 | RSI ≥ 70 | RSI ≥ 70 | RSI ≤ 30 | 15m |
+| **Bollinger Squeeze** | Price > BB Upper | Price < BB Lower | Price < BB Lower | Price > BB Upper | 15m |
+| **MACD Crossover** | MACD × Signal ↑ | MACD × Signal ↓ | MACD × Signal ↓ | MACD × Signal ↑ | 15m |
+| **SuperTrend Long Only** | SuperTrend Buy | SuperTrend Sell | — | — | 5m |
+| **VWAP+EMA Long Only** | Price > VWAP AND Price > EMA20 | Price < VWAP | — | — | 5m |
+
+### Strategy Format
+
+```json
+{
+  "name": "EMA Crossover",
+  "symbol": "SBIN",
+  "interval": "15m",
+  "quantity": 1,
+  "stop_loss": 2.0,
+  "target": 4.0,
+  "entry_long_conds": [
+    {"tag": "ema_cross_above", "fast_period": 12, "slow_period": 26}
+  ],
+  "exit_long_conds": [
+    {"tag": "ema_cross_below", "fast_period": 12, "slow_period": 26}
+  ],
+  "entry_short_conds": [
+    {"tag": "ema_cross_below", "fast_period": 12, "slow_period": 26}
+  ],
+  "exit_short_conds": [
+    {"tag": "ema_cross_above", "fast_period": 12, "slow_period": 26}
+  ]
+}
+```
 
 ### Backtesting
 
 ```python
-run_backtest(strategy, symbol, interval, period)
+run_backtest(strategy, symbol, interval, period, fromdate, todate, exchange)
 ```
 
-- Fetches historical data via yfinance
-- Computes all indicators
-- Walks through each bar sequentially (starting at index 60)
-- Tracks position state, entry/exit, stop loss, target hits
-- Returns: trades list, win rate, total PnL %, average PnL %
+- Fetches historical data via Angel One SmartAPI (primary) → yfinance (fallback)
+- Angel One data supports: 1m (30d), 3m (60d), 5m/10m (100d), 15m/30m (200d), 1h (400d), 1d (2000d)
+- Computes all indicators, walks through bars sequentially
+- Tracks position state, entry/exit for both long and short
+- Applies stop loss / target for both directions
+- C++ accelerated path for long-only; Python path for long+short
+- Returns: trades array with `side`, `entry_price`, `exit_price`, `pnl_pct`, `reason`
 
-### Kill Switch Integration
+### Signal Execution
 
-```python
-if kill_switch_getter and kill_switch_getter():
-    # Skip strategy cycle — no orders placed
-    return
-```
+- `POST /api/algo/execute-signal` — Places a live market order from a paper signal
+- Validates login state, kill switch, symbol/action/qty
+- Logs as `BUY_LIVE`/`SELL_LIVE` with response
+- UI shows "Copy to Live Trade" button on every `BUY_SIGNAL`/`SELL_SIGNAL` row
+
+### Data Source Priority
+
+1. **Angel One SmartAPI** — `getCandleData()` REST API (33 mapped NSE tokens + exchange/interval params)
+2. **Yahoo Finance** — yfinance download as fallback (any symbol)
+
+Angel One token map covers 33 major NSE stocks. Symbols not in the map fall through to Yahoo Finance automatically.
 
 ---
 
-## Risk Management
+## Angel One Data Source
 
-### Components
-
-1. **Daily Loss Limit**: Auto-stops trading when daily P&L hits threshold
-2. **Max Trades Per Day**: Prevents overtrading
-3. **Max Position Size**: Caps single order value
-4. **Kill Switch**: One-click emergency stop (cancels all orders + blocks placement)
-
-### Enforcement
+### Token Mapping
 
 ```python
-def _enforce_risk(action="trade"):
-    # Check daily loss limit
-    if abs(risk_state["daily_pnl"]) >= risk_config["daily_loss_limit"]:
-        return False, "Daily loss limit exceeded"
-    # Check max trades
-    if risk_state["trade_count"] >= risk_config["max_trades_per_day"]:
-        return False, "Max trades for today"
-    # Check position size
-    if action == "order" and order_value > risk_config["max_position_size"]:
-        return False, "Position size exceeds limit"
+ANGEL_TOKEN_MAP = {
+    "SBIN": "3045", "RELIANCE": "2885", "HDFCBANK": "1333",
+    "ICICIBANK": "4963", "INFY": "1594", "TCS": "11536",
+    # ... 33 stocks total
+}
 ```
 
-### Kill Switch Flow
+### Supported Intervals
 
-1. User clicks "KILL ON" button
-2. `POST /api/kill-switch` sets `kill_switch_active = True`
-3. Fetches all open orders via NeoAPI
-4. Cancels each order
-5. Returns confirmation
-6. All subsequent `place_order()` calls return 403
-7. Algo engine skips all cycles
-8. Button turns red with shake animation
+| Interval | Angel One | Max Days |
+|----------|-----------|----------|
+| 1m | ONE_MINUTE | 30 |
+| 3m | THREE_MINUTE | 60 |
+| 5m | FIVE_MINUTE | 100 |
+| 10m | TEN_MINUTE | 100 |
+| 15m | FIFTEEN_MINUTE | 200 |
+| 30m | THIRTY_MINUTE | 200 |
+| 1h | ONE_HOUR | 400 |
+| 1d | ONE_DAY | 2000 |
 
 ---
 
-## Technical Indicators & Charts
+## Alerts System
 
-### Client-Side Computations
+### Independent Alert Checker
 
-All technical indicators are computed client-side in JavaScript for speed:
+Unlike the watchlist-based polling, the alert system has its own dedicated checker:
 
-| Function | Formula |
-|----------|---------|
-| `calcSMA()` | Sum of last N values / N |
-| `calcEMA()` | `price * k + EMA_prev * (1 - k)` where `k = 2 / (N + 1)` |
-| `calcRSI()` | `100 - 100 / (1 + avg_gain / avg_loss)` |
-| `calcMACD()` | EMA12 - EMA26, then EMA9 of MACD line |
-| `calcBB()` | SMA ± (`std_dev * multiplier`) |
-| `calcSuperTrend()` | ATR-based bands with trend reversal logic |
-| `calcIchimoku()` | Tenkan, Kijun, Senkou Span A/B, Chikou |
-| `calcFibonacciLevels()` | Levels at 0, 23.6, 38.2, 50, 61.8, 78.6, 100% of range |
+```
+restartAlertChecker()
+└── Every 30 seconds:
+    1. Fetch LTP from Angel One quotes API for all alert symbols
+    2. Compare against alert thresholds (above/below)
+    3. Fire notification + sound on trigger
+```
 
-### Chart Overlays
+### Sound Alerts
 
-- **Candlestick series**: Green/red candles
-- **Volume histogram**: Color-coded by up/down
-- **EMA 20**: Blue line
-- **EMA 50**: Purple line
-- **Ichimoku Tenkan**: Orange line (9-period)
-- **Ichimoku Kijun**: Red line (26-period)
-- **Ichimoku Cloud**: Green/red shaded area (Senkou Span A/B)
-- **Fibonacci**: Dashed horizontal lines at each level
+```javascript
+function playAlertSound() {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 523.25;  // C5
+    // Then E5 after 80ms
+    osc.type = 'sine';
+    osc.connect(ctx.createGain());  // 15% gain
+}
+```
+
+- Zero external dependencies
+- Handles browser autoplay policy
+- Two-tone chime (C5 → E5)
 
 ---
 
@@ -549,13 +553,9 @@ All technical indicators are computed client-side in JavaScript for speed:
 ### Login Flow
 
 ```python
-client = NeoAPI(environment='prod')
+client = NeoAPI(environment='prod', consumer_key=CONSUMER_KEY)
 # Step 1: TOTP Login
-login = client.totp_login(
-    mobile_number="+9198...",
-    ucc="XXXXX",
-    totp=pyotp.TOTP(CONSUMER_KEY).now()
-)
+login = client.totp_login(mobile_number="+9198...", ucc="XXXXX", totp=TOTP)
 # Step 2: Validate session
 session = client.totp_validate(mpin="123456")
 ```
@@ -574,96 +574,64 @@ session = client.totp_validate(mpin="123456")
 | `orders()` | Get order book |
 | `quotes()` | Get live quotes |
 | `limits()` | Get margin/limits |
-| `scrip_master()` | Get instrument list |
-| `search_scrip()` | Search instruments |
-| `order_history()` | Get order history |
-| `trade_report()` | Get trade report |
 
-### Error Handling
+### Error 100008 (Unauthorized)
 
-```python
-if isinstance(response, dict):
-    if response.get("stCode") == "100008":
-        # Session expired — needs re-login
-        return {"error": "Session expired"}
-```
-
-All SDK responses are filtered through `_list()` helper to normalize inconsistent return formats:
-```python
-def _list(data):
-    d = data.get('data', data) if isinstance(data, dict) else data
-    return d if isinstance(d, list) else [d] if d else []
-```
+Occurs when session tokens don't match the current consumer key. Fix: Re-login with a fresh TOTP.
 
 ---
 
-## Telegram Alerts
+## Risk Management
 
-### Setup
+### Components
 
-1. Create bot: Message [@BotFather](https://t.me/BotFather) → `/newbot`
-2. Get bot token (format: `123456:ABCdef`)
-3. Find chat ID: Message [@userinfobot](https://t.me/userinfobot) → `/start`
-4. Add to `.env`:
-```env
-TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
-TELEGRAM_CHAT_ID=123456789
-```
+1. **Daily Loss Limit**: Auto-stops trading when daily P&L hits threshold
+2. **Max Trades Per Day**: Prevents overtrading
+3. **Max Position Size**: Caps single order value
+4. **Kill Switch**: One-click emergency stop (cancels all orders + blocks placement)
 
-### API Call
+### Kill Switch Flow
 
-```python
-r = requests.post(
-    f'https://api.telegram.org/bot{token}/sendMessage',
-    json={'chat_id': chat_id, 'text': message, 'parse_mode': 'Markdown'}
-)
-```
+1. User clicks "KILL ON" button
+2. `POST /api/kill-switch` sets `kill_switch_active = True`
+3. Fetches all open orders via NeoAPI and cancels each
+4. All subsequent `place_order()` calls return 403
+5. Algo engine skips all cycles, logs `BUY_SIGNAL`/`SELL_SIGNAL` instead of live orders
 
-### Features
-- Price alerts notify via Telegram + browser notification
-- Test button in UI to verify bot connectivity
-- Fields auto-populate from `.env` via `/api/telegram-config`
-- Send custom messages via `/api/send-telegram`
+---
+
+## Technical Indicators & Charts
+
+All indicators computed client-side in JavaScript:
+
+| Function | Description |
+|----------|-------------|
+| `calcSMA()` | Simple moving average |
+| `calcEMA()` | Exponential moving average |
+| `calcRSI()` | Relative Strength Index |
+| `calcMACD()` | MACD + signal + histogram |
+| `calcBB()` | Bollinger Bands (upper/mid/lower) |
+| `calcSuperTrend()` | ATR-based trend following |
+| `calcIchimoku()` | Tenkan/Kijun + Senkou Span A/B |
+| `calcFibonacciLevels()` | 0/23.6/38.2/50/61.8/78.6/100% |
+
+Chart overlays: candles, volume, EMA 20/50, Ichimoku Cloud, Fibonacci levels.
 
 ---
 
 ## Deployment
 
-### Local / Network
-
 ```bash
 python app.py
 # Runs on http://0.0.0.0:8080
-# Access from other devices on same network via your local IP
 ```
 
-### Production (Render / Railway / Fly.io)
-
-1. Push to GitHub
-2. Create `requirements.txt`:
-
-```txt
-neo-api-client==2.0.1
-Flask==3.*
-Flask-Cors==5.*
-Flask-SocketIO==5.*
-python-dotenv==1.*
-pyotp==2.*
-yfinance==0.*
-pandas==2.*
-numpy==1.*
-openai==1.*
-requests==2.*
-gunicorn==22.*
-eventlet==0.*
-```
-
-3. Create `Procfile` or use platform UI:
+For production (Render / Railway / Fly.io):
 ```
 web: gunicorn -k eventlet -w 1 app:app
 ```
 
-> **Note**: Kotak Neo requires IP whitelisting — cloud deployments with dynamic IPs may break login/orders. NSE option chain + AI + charts work fine from anywhere.
+**Note**: Kotak Neo requires IP whitelisting — cloud deployments with dynamic IPs may break login/orders.
 
 ---
 
@@ -686,8 +654,6 @@ web: gunicorn -k eventlet -w 1 app:app
 | POST | `/api/place-order` | Place order |
 | POST | `/api/modify-order` | Modify order |
 | POST | `/api/cancel-order` | Cancel order |
-| POST | `/api/cancel-cover-order` | Cancel cover order |
-| POST | `/api/cancel-bracket-order` | Cancel bracket order |
 | GET | `/api/orders` | Get orders |
 | GET | `/api/positions` | Get positions |
 | GET | `/api/holdings` | Get holdings |
@@ -698,8 +664,6 @@ web: gunicorn -k eventlet -w 1 app:app
 | GET | `/api/trade-report` | Trade report |
 | GET | `/api/scrip-master` | Instrument list |
 | GET | `/api/search-scrip` | Search instruments |
-| POST | `/api/margin-required` | Required margin |
-| POST | `/api/subscribe-order-feed` | Subscribe to order feed |
 
 ### Option Chain Endpoints
 
@@ -722,26 +686,21 @@ web: gunicorn -k eventlet -w 1 app:app
 | POST | `/api/ai/analyze-trades` | Trade journal analysis |
 | GET | `/api/ai/analyze-portfolio` | Portfolio analysis |
 
-### Historical Data
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/historical` | OHLCV data via yfinance |
-
 ### Algo Trading Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/algo/templates` | Strategy templates |
+| GET | `/api/algo/templates` | Strategy templates (6) |
 | GET/POST | `/api/algo/strategies` | List/create strategies |
 | DELETE | `/api/algo/strategies/<id>` | Delete strategy |
-| POST | `/api/algo/strategies/<id>/toggle` | Enable/disable strategy |
+| POST | `/api/algo/strategies/<id>/toggle` | Enable/disable |
 | GET | `/api/algo/status` | Engine status |
 | POST | `/api/algo/start` | Start engine |
 | POST | `/api/algo/stop` | Stop engine |
 | GET | `/api/algo/logs` | Trade logs |
 | POST | `/api/algo/clear-logs` | Clear trade logs |
 | POST | `/api/algo/backtest` | Run backtest |
+| POST | `/api/algo/execute-signal` | Execute signal as live order |
 
 ### Risk & Alerts
 
@@ -756,66 +715,6 @@ web: gunicorn -k eventlet -w 1 app:app
 
 ---
 
-## Screenshots
-
-![AI Chat Market Outlook](assets/screenshots/ai-chat-outlook.png)
-
-AI Chat gives market outlooks, sector notes, catalysts, and trading context in a conversational format.
-
-![Account Profile](assets/screenshots/account-profile.png)
-
-Account shows login status, client profile details, funds and limits, and trade report summary.
-
-![AI Strategy Generator](assets/screenshots/ai-strategy-generator.png)
-
-Strategy Generator creates a trade plan from symbol, timeframe, and risk tolerance.
-
-![AI Risk Assessment](assets/screenshots/ai-risk-assessment.png)
-
-Risk Assessment checks portfolio value, cash balance, symbol, quantity, price, and trade side before entry.
-
-![Orders Book](assets/screenshots/orders-book.png)
-
-Orders shows the order book, order feed, refresh controls, and broker response status.
-
-![Trading Place Order](assets/screenshots/trading-place-order.png)
-
-Trading provides the order ticket for placing, modifying, cancelling, searching scrips, and checking margin.
-
-![AI Trade Journal](assets/screenshots/trade-journal.png)
-
-Trade Journal fetches trades and analyzes mistakes, patterns, and improvement areas.
-
-![Risk Management Alerts](assets/screenshots/risk-management-alerts.png)
-
-Risk Management handles daily limits, position caps, kill switch controls, AI risk advice, and price alerts.
-
-![Dashboard Overview](assets/screenshots/dashboard-overview.png)
-
-Dashboard summarizes P&L, positions, trades today, margin, holdings, and quick AI tools.
-
-![Option Chain AI Analysis](assets/screenshots/option-chain-analysis-detail.png)
-
-Option Chain AI Analysis explains PCR, max pain, OI concentration, support/resistance, and market bias.
-
-![Option Chain AI Detail View](assets/screenshots/option-chain-analysis-alt.png)
-
-Option Chain detail keeps AI commentary visible beside refresh and analysis controls.
-
-![Option Chain Summary](assets/screenshots/option-chain-summary.png)
-
-Option Chain Summary shows underlying price, PCR, max pain, CE OI, PE OI, expiry, and symbol controls.
-
-![Technical Indicators](assets/screenshots/technical-indicators.png)
-
-Technical Indicators show LTP, RSI, MACD, EMA trend, Bollinger, SuperTrend, VWAP, ATR, volume, and day change.
-
-![Option Chain Table](assets/screenshots/option-chain-ai-analysis.png)
-
-Option Chain Table displays strike-wise CE/PE LTP, OI, OI change, IV, bid, ask, volume, and price change.
-
----
-
 ## Disclaimer
 
 **WARNING: Trading involves substantial risk of loss.**
@@ -826,7 +725,7 @@ This software is provided for **educational and personal use only**. It is not f
 - Verify all orders and positions regularly
 - Understand the Kotak Neo API's behavior, limits, and error handling
 - The AI analysis is for reference only — always do your own research
-- Option chain data from NSE is provided "as-is" with no guarantee of accuracy or timeliness
+- Angel One SmartAPI credentials are stored in `.env.angel` — keep secure
 
 ---
 
