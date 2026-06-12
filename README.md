@@ -752,4 +752,13 @@ This software is provided for **educational and personal use only**. It is not f
 
 ---
 
-*Built by Dnyaneshwar Jadhav*
+## 👨‍💻 Built by Dnyaneshwar Jadhav
+
+**AI/ML Developer | Quant Developer | Algorithmic Trading Developer | Python Developer**
+
+📱 **Phone:** +91 8806160767
+📧 **Email:** [jadhavdnyaneshwar701@gmail.com](mailto:jadhavdnyaneshwar701@gmail.com)
+💼 **LinkedIn:** https://linkedin.com/in/dnyaneshwar-jadhav-34112a2a8
+🌐 **Portfolio:** https://trademind-ai-xniwrofd.devinapps.com
+
+*"From Data to Alpha."* 📊⚡
