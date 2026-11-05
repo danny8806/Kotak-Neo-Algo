@@ -210,6 +210,7 @@ class DhanTokenSupervisor:
                     nxt=self.next_refresh_time(now,expiry,created)
                     self._set(state="AUTHENTICATED",last_success=now.isoformat(timespec="seconds"),
                               expires_at=expiry.isoformat(timespec="seconds") if expiry else None,
+                              error=None,
                               next_refresh=nxt.isoformat(timespec="seconds"))
                 except Exception as exc:
                     cooldown="cooldown" in str(exc).lower()
