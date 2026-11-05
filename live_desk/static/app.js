@@ -104,12 +104,25 @@ function render(s){
  text("diagnostics","Dhan auth: "+dhanAuth+" · feed: "+feed+" · Kotak: "+(brokerReady?"connected":"disconnected")+
    " · Last broker refresh: "+stamp(s.broker_books_updated_at)+" IST");
  const mapped=s.instrument_mappings||[];
- text("mappingInfo",mapped.length?mapped.filter(x=>x.status==="READY").length+" / "+mapped.length+" signal instruments mapped in Dhan and Kotak":"Waiting for verified Dhan and Kotak instrument maps");
+  const dhanMapped=mapped.filter(x=>x.dhan_security_id).length,kotakMapped=mapped.filter(x=>x.kotak_trading_symbol&&x.kotak_token).length;
+  text("mappingInfo",mapped.length?dhanMapped+" / "+mapped.length+" mapped in Dhan · "+kotakMapped+" / "+mapped.length+" mapped in Kotak":"Waiting for today’s verified signal report");
  const mappingBody=$("mappingBody");mappingBody.replaceChildren();
  if(!mapped.length)mappingBody.append(emptyRow(5,"Mappings appear after today’s signal report is verified."));
  for(const m of mapped)mappingBody.append(row(td(m.symbol,"code"),td(m.dhan_security_id||"—"),
    td(m.kotak_trading_symbol||"—","code"),td(m.kotak_token||"—","code"),
    td(m.status||"UNAVAILABLE","side "+(m.status==="READY"?"long":"short"))));
+  const orb=s.orb_monitor||{},ranges=orb.opening_ranges||[],breakouts=orb.breakouts||[];
+  text("orbInfo",orb.state==="MONITORING"?
+    (orb.order_submission_enabled?"Dhan ticks monitored · order gate separately armed":"Dhan ticks monitored read-only · Kotak/order gate blocked"):
+    "Waiting for today’s verified signal and Dhan opening candle");
+  const orbBody=$("orbBody");orbBody.replaceChildren();
+  if(!ranges.length)orbBody.append(emptyRow(6,"No active Dhan ORB monitor."));
+  for(const range of ranges){
+    const signal=signals.find(x=>x.symbol===range.symbol)||{},event=breakouts.find(x=>x.symbol===range.symbol),quote=quotes[range.symbol]||{};
+    orbBody.append(row(td(range.symbol,"code"),td(signal.side||"—"),td(range.high,"right-align"),
+      td(range.low,"right-align"),td(quote.fresh?money(quote.ltp):"—","right-align"),
+      td(event?"BREAKOUT OBSERVED · "+stamp(event.triggered_at):"WAITING FOR CROSS",event?"positive":"")));
+  }
  const canArm=s.orders_permitted_by_server===true&&s.readiness===true&&!s.armed;
  $("arm").disabled=!canArm;$("disarm").disabled=!s.armed;
  text("armNotice",!s.orders_permitted_by_server?"Server-side LIVE_ORDERS_ALLOWED is OFF. Monitoring is read-only.":
