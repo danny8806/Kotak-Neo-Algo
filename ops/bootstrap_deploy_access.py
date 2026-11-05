@@ -27,7 +27,7 @@ import sys
 
 DEFAULT_ENV = Path.home() / "Desktop" / "MCX-TRADER-LIVE" / "mcx-trader.env"
 DEFAULT_KEY = Path.home() / ".ssh" / "kotak_news_actions_ed25519"
-REPOSITORY = "danny8806/Indian-Market-Intelligence-AI"
+REPOSITORY = "danny8806/Kotak-Neo-Algo"
 
 
 def fingerprint(key_bytes: bytes) -> str:
