@@ -71,6 +71,7 @@ class DhanIndexDataTests(unittest.TestCase):
                 self.token_expiry=now+timedelta(hours=24)
                 done.set()
         manager=DhanTokenSupervisor(Client(),clock=lambda:now)
+        manager._set(error="stale authentication error")
         manager.start()
         try:
             self.assertTrue(done.wait(1))
@@ -78,6 +79,7 @@ class DhanIndexDataTests(unittest.TestCase):
             while manager.snapshot().get("state")!="AUTHENTICATED" and time.monotonic()<deadline:
                 time.sleep(.01)
             self.assertEqual(manager.snapshot()["state"],"AUTHENTICATED")
+            self.assertIsNone(manager.snapshot().get("error"))
             self.assertNotIn("do-not-show-this-token",str(manager.snapshot()))
         finally:manager.stop()
 
