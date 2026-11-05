@@ -2,6 +2,10 @@
 
 One direct path: **ChatGPT scheduled task → HTTPS signal bridge in the dashboard → Dhan ORB check → Kotak Neo**. GitHub hosts the code only; it is not part of daily signal delivery.
 
+The [5 November production acceptance record](reports/production-hardening-2026-11-05.md) documents the deployed startup/08:00 IST authentication, broker-book and live P&L fixes, 130 passing tests, 495-symbol dual-broker mapping audit, live dashboard checks, and remaining market-session acceptance gates. Production remains disarmed; simulated test fills are not live execution evidence.
+
+The [dashboard workspace guide](reports/dashboard-workspace-2026-11-05.md) covers the separate views, interactive books, configuration controls, connection checks and desktop/mobile validation.
+
 ## Daily flow
 
 1. At 09:00 IST, the ChatGPT task researches news and produces a complete JSON report matching `schema/stock-signals.schema.json`.

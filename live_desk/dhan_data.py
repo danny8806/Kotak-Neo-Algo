@@ -168,6 +168,15 @@ class DhanTokenSupervisor:
         with self._lock:self.status.update(values)
 
     @staticmethod
+    def refresh_due(now,token,expiry,created,last_refresh_date):
+        return (not token or last_refresh_date is None or
+                (now.hour>=8 and last_refresh_date!=now.date()) or
+                (created is not None and now.hour>=8 and
+                 created.astimezone(IST)<now.replace(hour=8,minute=0,second=0,microsecond=0)) or
+                (expiry is not None and now>=expiry.astimezone(IST)-timedelta(minutes=15)) or
+                (created is not None and now>=created.astimezone(IST)+timedelta(hours=23)))
+
+    @staticmethod
     def next_refresh_time(now:datetime,expiry:datetime|None,created:datetime|None):
         scheduled=now.replace(hour=8,minute=0,second=0,microsecond=0)
         if now>=scheduled:scheduled+=timedelta(days=1)
@@ -194,10 +203,7 @@ class DhanTokenSupervisor:
             now=self.clock().astimezone(IST)
             expiry=self.client.token_expiry
             created=self.client.token_created_at
-            due=(not self.client.token or self._last_refresh_date is None or
-                 (now.hour>=8 and self._last_refresh_date!=now.date()) or
-                 (expiry is not None and now>=expiry.astimezone(IST)-timedelta(minutes=15)) or
-                 (created is not None and now>=created.astimezone(IST)+timedelta(hours=23)))
+            due=self.refresh_due(now,self.client.token,expiry,created,self._last_refresh_date)
             if due:
                 self._set(state="AUTHENTICATING")
                 try:

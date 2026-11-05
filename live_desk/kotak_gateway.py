@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from live_desk.dhan_data import totp_now
 from live_desk.kotak_instruments import KotakInstrument
+from live_desk.kotak_response import book_rows
 
 
 @dataclass(frozen=True)
@@ -50,14 +51,16 @@ def place_kotak_order(client, instrument: KotakInstrument, side: str,
     """Send once. An exception or missing order ID is ambiguous, never retried here."""
     if side not in {"BUY", "SELL"} or type(quantity) is not int or quantity <= 0:
         raise ValueError("Invalid Kotak order direction or quantity")
-    if not tag or not instrument.trading_symbol or not instrument.token.isdecimal():
+    if (not tag or instrument.trading_symbol != f"{instrument.symbol}-EQ" or
+            not instrument.symbol or not instrument.token.isdecimal()):
         raise ValueError("Exact Kotak instrument mapping and unique tag required")
     response = client.place_order(exchange_segment="nse_cm", product="MIS", price="0",
                                   order_type="MKT", quantity=str(quantity), validity="DAY",
                                   trading_symbol=instrument.trading_symbol,
                                   transaction_type="B" if side == "BUY" else "S",
                                   amo="NO", tag=tag)
-    if not isinstance(response, dict) or response.get("stat") != "Ok":
+    if (not isinstance(response, dict) or str(response.get("stat", "")).lower() != "ok" or
+            not str(response.get("nOrdNo") or "").strip()):
         raise RuntimeError("Kotak order submission was not acknowledged; reconcile before retry")
     return {"broker_order_id": str(response.get("nOrdNo") or ""),
             "requires_reconciliation": True, "tag": tag}
@@ -67,20 +70,16 @@ def reconcile_kotak_tag(client, tag: str) -> dict:
     """Read actual Kotak order state and trade fills for one caller tag."""
     if not tag:
         raise ValueError("Order tag is required")
-    orders = client.order_report()
-    if not isinstance(orders, dict) or not isinstance(orders.get("data"), list):
-        raise RuntimeError("Kotak order report unavailable")
-    matching = [row for row in orders["data"] if isinstance(row, dict) and row.get("GuiOrdId") == tag]
+    orders = book_rows(client.order_report(), "orders")
+    matching = [row for row in orders if row.get("GuiOrdId") == tag]
     if len(matching) != 1:
         raise RuntimeError("Kotak order tag missing or ambiguous")
     order = matching[0]
     order_id = str(order.get("nOrdNo") or "")
     if not order_id:
         raise RuntimeError("Kotak order ID missing")
-    trades = client.trade_report()
-    if not isinstance(trades, dict) or not isinstance(trades.get("data"), list):
-        raise RuntimeError("Kotak trade report unavailable")
-    fills = [row for row in trades["data"] if isinstance(row, dict) and
+    trades = book_rows(client.trade_report(), "trades")
+    fills = [row for row in trades if
              str(row.get("nOrdNo") or "") == order_id]
     fill_ids = set()
     quantity = 0

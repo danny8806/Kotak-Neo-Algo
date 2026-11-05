@@ -12,7 +12,7 @@ Signal intake is restricted to the official Nifty 500 constituent snapshot in `n
 The operational trading snapshot keeps standard NSE `EQ` series with Indian `INE` equity ISINs. REIT units, trade-to-trade series and placeholder rows remain visible in the full constituent audit but are excluded from eligible trading symbols.
 3. The bridge validates the date, cutoff, sources and JSON contract, stores the report and returns `ACCEPTED` or `DUPLICATE`. The task checks the status and hash. No verified receipt means no entry signals.
 4. The supervisor resolves current NSE cash-equity mappings, reads the 09:15 Dhan candle and listens for fresh Dhan ticks.
-5. LONG qualifies on a direct cross above the candle high; SHORT qualifies on a direct cross below its low. The system uses whole-share MIS market orders and reconciles fills from Kotak's reports. Configured square-off is 15:15 IST.
+5. LONG qualifies on a direct cross above the candle high; SHORT qualifies on a direct cross below its low. The system submits whole-share MIS `MKT` requests and reconciles fills from Kotak's reports. Kotak's current guidance describes conversion of API market requests into protected limit orders; submission does not guarantee a fill. Configured square-off is 15:15 IST.
 
 The dashboard embeds the receiver in `bridge/app.py`. GitHub is not part of this daily signal path. A running scheduled task alone does not prove delivery; inspect its acknowledgment and the authenticated dashboard state.
 
@@ -49,3 +49,15 @@ There is no stop-loss or daily-loss cutoff. At 15:15 the supervisor checks the l
 - `static/`: dashboard UI.
 
 CI uses mocked broker responses; it does not establish live account behavior or profitability.
+
+## Production recovery and live dashboard
+
+Both broker sessions authenticate at application startup and refresh at 08:00 IST while the service is running. Startup before 08:00 does not skip that morning's refresh. Kotak refresh is single-flight, uses 60–300 second failure backoff, and retries expired sessions after a cooldown. Authentication never arms orders. Dhan refresh also reconnects existing data sockets. The application must be running for its timers to execute; Compose restarts the service after a host/process restart.
+
+Kotak's documented `5203 / No Data` response is accepted only as an empty positions/orders/trades book. Other response failures stay blocked. Account books refresh about every five seconds and expire after twenty seconds. Account positions outside the research watchlist receive a separate read-only Dhan ticker subscription. Open P&L is revalued on each snapshot using fresh exchange ticks; missing/stale ticks invalidate the unrealized value immediately. Closed positions retain broker-book realized P&L without a quote. Carry-forward positions with unverified cost basis show unavailable P&L. Gross P&L excludes fees; net after fees stays unavailable until authoritative charges exist. All broker-returned NSE EQ orders/fills are available without the previous row truncation.
+
+The ticker callback performs no broker HTTP requests. Mappings are prepared before opening-range construction. Durable PostgreSQL reservations serialize exposure across workers, then separate HTTP workers submit orders. Kotak calls share per-process pacing (10 mutating requests/second and 20 report requests/second); deploy one active supervisor per broker account. Deployment pins the tested Kotak SDK version. The dashboard shows both authentication states, next refresh times, the blocked stage, and stale-data status.
+
+Queued entries are rechecked for authorization, trading window and tick age before the durable send transition. A lost acknowledgement triggers bounded report-read retries and later reconciliation by the original unique tag. **An unknown submission is never sent again merely because the tag is temporarily absent.** Startup reconciles persisted unknown submissions even without a research report. Unresolved earlier sessions block new entries. EOD cancellation/fill reconciliation exits only confirmed remaining quantities, and completed exits are not sent again.
+
+Kotak requires a whitelisted VPS outbound IP for order APIs even when login and reports work. Verify this in the broker console before any authorized market-session acceptance test. See the [official IP and market-order guidance](https://github.com/Kotak-Neo/Kotak-Neo/blob/main/docs/static-ip-whitelisting.md). This service has no demo or paper execution route; simulated exchange responses exist only in the isolated tests.

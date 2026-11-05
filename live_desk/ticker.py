@@ -33,6 +33,7 @@ class LiveTicker:
         self.stop_event=threading.Event()
         self.thread=None
         self.socket=None
+        self.token_created_at=None
         self.status={"state":"NOT_STARTED","last_tick":None,"error":None}
 
     def snapshot(self):
@@ -40,6 +41,19 @@ class LiveTicker:
 
     def _set(self,**updates):
         with self.lock:self.status.update(updates)
+
+    def refresh_authentication(self):
+        """Reconnect an existing socket after the Dhan supervisor rotates tokens."""
+        with self.lock:
+            changed=(self.token_created_at is not None and
+                     self.token_created_at!=getattr(self.client,"token_created_at",None))
+            ws=self.socket
+            if changed:
+                self.token_created_at=getattr(self.client,"token_created_at",None)
+                self.status.update(state="RECONNECTING",error="Dhan token refreshed")
+        if changed and ws:
+            ws.close()
+        return changed
 
     def start(self):
         if self.thread and self.thread.is_alive():return
@@ -64,6 +78,7 @@ class LiveTicker:
         while not self.stop_event.is_set():
             try:
                 url=self.client.websocket_url()
+                self.token_created_at=getattr(self.client,"token_created_at",None)
                 def on_open(ws):
                     ws.send(json.dumps({
                         "RequestCode":15,"InstrumentCount":len(self.map),
@@ -86,7 +101,7 @@ class LiveTicker:
                         exchange_at=datetime.fromisoformat(tick["exchange_timestamp"])
                         tick.update(symbol=symbol,timestamp=exchange_at,
                                     received_at=now)
-                        self._set(last_tick=now.isoformat(),
+                        self._set(last_tick=now.isoformat(),error=None,
                                   last_exchange_trade_at=exchange_at.isoformat(),
                                   state="CONNECTED")
                         try:self.on_tick(tick)

@@ -1,0 +1,73 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
+const fs=require('node:fs'),http=require('node:http'),assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
+const root=path.resolve(__dirname,'../live_desk/static');
+let revision=0,healthFailure=false;const mutations=[];
+const state={mode:'LIVE_KOTAK_NEO_ONLY',server_time:new Date().toISOString(),session_date:'2026-11-05',
+ signal_status:'READY',signals:[{symbol:'TESTA',side:'LONG',rank:1,news_summary:'Synthetic research fixture A',reason:'Test evidence for the isolated UI runner.',first_available_at:'2026-11-05T08:00:00+05:30',sources:[{url:'https://www.nseindia.com/',title:'Test reference',published_at:'2026-11-05T08:00:00+05:30'}]},{symbol:'TESTB',side:'SHORT',rank:1,news_summary:'Synthetic research fixture B',reason:'Second isolated test candidate.',sources:[]}],
+ positions:[{symbol:'TESTA',side:'LONG',net_quantity:5,ltp:105,realized_gross:50,unrealized_gross:25,gross_mark_to_market:75,pnl_status:'LIVE'}],
+ orders:Array.from({length:151},(_,i)=>({broker_order_id:'TEST-'+i,symbol:i%2?'TESTB':'TESTA',side:'BUY',order_quantity:'1',status:'complete',tag:i===150?'=test-formula':'test-tag'})),
+ fills:Array.from({length:151},(_,i)=>({fill_id:'TEST-FILL-'+i,symbol:'TESTA',filled_quantity:'1',fill_price:100})),
+ quotes:{TESTA:{fresh:true,ltp:105,open:100},TESTB:{fresh:true,ltp:95,open:100}},broker_connected:true,available_cash:'1000000',
+ pnl:{gross_realized:50,gross_unrealized:25,gross_total:75,net_after_fees:null},broker_books_updated_at:new Date().toISOString(),
+ armed:false,readiness:false,orders_permitted_by_server:false,dhan_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},kotak_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},
+ supervisor_status:'DISARMED',blocked_stage:'SERVER_ORDERS_DISABLED',readiness_blockers:['SERVER_ORDERS_DISABLED'],market_feed:{state:'CONNECTED'},
+ strategy:{allocation_per_position:100000,max_positions:10,gross_cap:1000000,max_long:5,max_short:5,entry_cutoff:'10:00',exit_time:'15:15'},
+ instrument_mappings:[{symbol:'TESTA',dhan_security_id:'123',kotak_trading_symbol:'TESTA-EQ',kotak_token:'456',status:'READY'},{symbol:'TESTB',dhan_security_id:'124',kotak_trading_symbol:'TESTB-EQ',kotak_token:'457',status:'READY'}],
+ orb_monitor:{state:'MONITORING',order_submission_enabled:false,opening_ranges:[{symbol:'TESTA',high:100,low:95},{symbol:'TESTB',high:101,low:96}],breakouts:[]},intents:[],runtime_errors:[]};
+function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOString();}
+(async()=>{
+ const server=http.createServer((req,res)=>{
+  if(req.method==='POST'){mutations.push(req.url);if(req.url!=='/api/live/settings'){res.writeHead(405);res.end();return;}let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{const data=JSON.parse(body);state.strategy.allocation_per_position=Number(data.per_position);bump();res.setHeader('Content-Type','application/json');res.end(JSON.stringify({saved:true}));});return;}
+  if(req.url.startsWith('/api/')||req.url==='/health'||req.url==='/ready'){res.setHeader('Content-Type','application/json');res.statusCode=req.url==='/ready'?503:req.url==='/health'&&healthFailure?503:200;res.end(JSON.stringify(req.url==='/api/state'?state:{status:'test-response'}));return;}
+  const name=req.url==='/'?'index.html':req.url.replace('/static/','');
+  if(!['index.html','app.js','styles.css'].includes(name)){res.writeHead(404);res.end();return;}
+  res.setHeader('Content-Type',name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(path.join(root,name)));
+ });
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
+ try{
+  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.addInitScript(()=>{window.WebSocket=class {static OPEN=1;static CONNECTING=0;constructor(){this.readyState=1;window._testSocket=this;}close(){this.readyState=3;}};});
+  await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>document.getElementById('mtm').textContent==='₹75.00');
+  const go=async name=>{await page.locator('nav [data-view="'+name+'"]').click();await page.locator('#view-'+name).waitFor({state:'visible'});assert.equal(await page.locator('.view:visible').count(),1);};
+  const push=async()=>{bump();await page.evaluate(s=>window._testSocket.onmessage({data:JSON.stringify(s)}),state);};
+  assert.equal(await page.locator('#realizedPnl').textContent(),'₹50.00');assert.equal(await page.locator('#unrealizedPnl').textContent(),'₹25.00');assert.equal(await page.locator('#netPnl').textContent(),'—');
+  assert.equal(await page.evaluate(()=>document.body.scrollHeight<=innerHeight+1),true,'The workspace must not become a long document');
+  assert.equal(await page.locator('#view-overview').evaluate(n=>n.scrollHeight<=n.clientHeight+1),true,'Desktop overview should fit without scrolling');
+  for(const selector of ['.pnl-panel','.readiness-panel'])assert.equal(await page.locator(selector).evaluate(n=>n.scrollHeight<=n.clientHeight+1),true,'Overview cards must not clip their contents');
+  await page.screenshot({path:path.join(os.tmpdir(),'kotak-dashboard-isolated-test-desktop.png'),fullPage:true,animations:'disabled'});
+  await go('signals');assert.equal(await page.locator('#signalBody tr').count(),2);
+  await page.locator('#signalSearch').fill('TESTB');assert.equal(await page.locator('#signalBody tr').count(),1);await page.locator('#signalBody button').click();assert.match(await page.locator('#evidence').textContent(),/fixture B/);
+  await page.locator('#signalSearch').fill('');await page.locator('#signalFilters [data-filter="LONG"]').click();assert.equal(await page.locator('#signalBody tr').count(),1);assert.match(await page.locator('#signalBody').textContent(),/TESTA/);
+  await go('market');assert.equal(await page.locator('#orbBody tr').count(),2);await page.locator('[data-market-tab="mapping"]').click();assert.equal(await page.locator('#mappingBody tr').count(),2);await page.locator('#marketSearch').fill('TESTA');assert.equal(await page.locator('#mappingBody tr').count(),1);
+  await go('positions');assert.equal(await page.locator('#positionBody td').count(),8);await page.locator('#positionBody .row-open').click();await page.locator('#detailDialog').waitFor({state:'visible'});assert.match(await page.locator('#detailContent').textContent(),/105/);await page.keyboard.press('Escape');await page.locator('#detailDialog').waitFor({state:'hidden'});
+  await page.locator('#positionFilters [data-filter="closed"]').click();assert.match(await page.locator('#positionBody').textContent(),/No NSE/);await page.locator('#positionFilters [data-filter="open"]').click();assert.equal(await page.locator('#positionBody .row-open').count(),1);
+  await go('orders');assert.equal(await page.locator('#orderBody tr').count(),50);assert.match(await page.locator('#ordersPagination').textContent(),/151/);
+  await page.locator('#ordersPagination [aria-label="Next page"]').focus();await push();assert.equal(await page.locator('#ordersPagination [aria-label="Next page"]').evaluate(n=>n===document.activeElement),true,'Live updates must preserve pagination focus');
+  for(let i=0;i<3;i++)await page.locator('#ordersPagination [aria-label="Next page"]').click();assert.equal(await page.locator('#orderBody tr').count(),1);assert.match(await page.locator('#orderBody').textContent(),/TEST-0/);
+  await page.locator('#orderSearch').fill('TEST-150');assert.equal(await page.locator('#orderBody tr').count(),1);await page.locator('#orderBody tr td:first-child').click();assert.match(await page.locator('#detailContent').textContent(),/TEST-150/);await page.locator('#closeDetail').click();
+  const downloadPromise=page.waitForEvent('download');await page.locator('[data-export="orders"]').click();const download=await downloadPromise;const csv=fs.readFileSync(await download.path(),'utf8');assert.match(csv,/'=test-formula/);assert.match(csv,/TEST-150/);
+  await page.locator('#orderSearch').fill('');await page.locator('#orderStatus').selectOption('rejected');assert.match(await page.locator('#orderBody').textContent(),/No orders/);await page.locator('#orderStatus').selectOption('complete');assert.equal(await page.locator('#orderBody tr').count(),50);
+  await go('fills');assert.equal(await page.locator('#fillBody tr').count(),50);await page.locator('#fillSearch').fill('TEST-FILL-0');assert.equal(await page.locator('#fillBody tr').count(),1);
+  await go('settings');assert.equal(await page.locator('#saveSettings').isDisabled(),true);await page.locator('#settingAllocation').fill('125000');await page.locator('#settingGross').focus();await push();assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');
+  await go('overview');await go('settings');assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');await page.locator('#resetSettings').click();assert.equal(await page.locator('#settingAllocation').inputValue(),'100000');
+  await page.locator('#settingAllocation').fill('125000');await page.locator('#saveSettings').click();await page.waitForFunction(()=>document.getElementById('saveSettings').disabled);assert.equal(state.strategy.allocation_per_position,125000);
+  state.armed=true;await push();assert.equal(await page.locator('#settingAllocation').isDisabled(),true);assert.equal(await page.locator('#saveSettings').isDisabled(),true);state.armed=false;await push();assert.equal(await page.locator('#arm').isDisabled(),true);
+  state.orders_permitted_by_server=true;state.readiness=true;state.readiness_blockers=[];await push();
+  await page.locator('#arm').click();await page.locator('#armModal').waitFor({state:'visible'});
+  await page.locator('#authorization').fill('TEST ONLY - DO NOT SUBMIT');await page.locator('#otp').fill('000000');await page.keyboard.press('Escape');
+  await page.locator('#armModal').waitFor({state:'hidden'});await page.waitForFunction(()=>document.getElementById('otp').value==='');assert.equal(await page.locator('#otp').inputValue(),'');assert.equal(await page.locator('#authorization').inputValue(),'');
+  state.orders_permitted_by_server=false;state.readiness=false;state.readiness_blockers=['SERVER_ORDERS_DISABLED'];await push();
+  await go('connections');assert.equal(await page.locator('#connectionCards .connection-card').count(),4);await page.locator('#runChecks').click();await page.waitForFunction(()=>document.querySelectorAll('#checkResults .check-row').length===7);assert.match(await page.locator('#checkResults').textContent(),/Blocked · HTTP 503/);assert.equal(await page.locator('#checkResults .negative').count(),0);
+  healthFailure=true;await page.locator('#runChecks').click();await page.waitForFunction(()=>document.querySelectorAll('#checkResults .negative').length===1);healthFailure=false;
+  await go('overview');await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Mobile page overflows');
+  await page.waitForFunction(()=>document.getElementById('sidebar').getBoundingClientRect().right<=0);await page.locator('#toast').waitFor({state:'hidden'});
+  await page.screenshot({path:path.join(os.tmpdir(),'kotak-dashboard-isolated-test-mobile.png'),fullPage:true,animations:'disabled'});
+  await page.locator('#menuToggle').click();assert.equal(await page.locator('#menuToggle').getAttribute('aria-expanded'),'true');await go('orders');assert.equal(await page.locator('#menuToggle').getAttribute('aria-expanded'),'false');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.reload();await page.waitForFunction(()=>document.getElementById('view-orders').hidden===false);await page.waitForFunction(()=>document.getElementById('connection').textContent==='KOTAK CONNECTED');
+  await page.evaluate(()=>window._testSocket.onmessage({data:'{invalid'}));for(const id of ['funds','posCount','mtm','realizedPnl','unrealizedPnl','netPnl'])assert.equal(await page.locator('#'+id).textContent(),'—');assert.equal(await page.locator('#arm').isDisabled(),true);
+  await page.locator('#menuToggle').click();await go('positions');assert.match(await page.locator('#positionBody').textContent(),/unavailable/);
+  await push();assert.equal(await page.locator('#positionBody .row-open').count(),1);
+  assert.deepEqual(mutations,['/api/live/settings'],'Read-only checks and navigation must never mutate broker/signal state');assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({desktop:'passed',mobile:'passed',eight_separate_views:'passed',search_and_filters:'passed',full_dataset_pagination:'passed',csv_export_sanitized:'passed',detail_drawers:'passed',unsaved_settings_preserved:'passed',configuration_save_and_lock:'passed',readonly_connection_checks:'passed',stale_navigation_and_recovery:'passed',javascript_errors:0}));
+ }finally{if(browser)await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}
+})().catch(e=>{console.error(e.stack||e.message);process.exitCode=1;});

@@ -110,7 +110,7 @@ class LiveLedger:
                 reserved_notional=notional, state="RESERVED", filled_quantity=0,
                 created_at=stamp, updated_at=stamp))
             self._event(db, tag, "RESERVED", "Entry intent persisted", stamp)
-            return {"tag": tag, "symbol": symbol, "side": side, "quantity": quantity}
+            return {"tag": tag, "symbol": symbol, "phase":"ENTRY", "side": side, "quantity": quantity}
 
     def reserve_exit(self, *, session_date: date, symbol: str, at: datetime) -> dict | None:
         if at.tzinfo is None or at.utcoffset() is None:
@@ -132,7 +132,7 @@ class LiveLedger:
                 reserved_notional=Decimal("0"), state="RESERVED", filled_quantity=0,
                 created_at=stamp, updated_at=stamp))
             self._event(db, tag, "RESERVED", "Exit intent persisted", stamp)
-            return {"tag": tag, "symbol": symbol, "side": side, "quantity": qty}
+            return {"tag": tag, "symbol": symbol, "phase":"EXIT", "side": side, "quantity": qty}
 
     def mark_submission_unknown(self, tag: str, at: datetime) -> None:
         with self.lock, self.engine.begin() as db:
@@ -155,6 +155,15 @@ class LiveLedger:
                 state="CANCEL_PENDING", updated_at=stamp))
             self._event(db, tag, "CANCEL_PENDING", "One broker cancellation attempt is in progress", stamp)
 
+    def mark_not_submitted(self, tag: str, at: datetime) -> None:
+        """An entry lost authorization/freshness while queued; no broker call was made."""
+        with self.lock, self.engine.begin() as db:
+            row=db.execute(select(intents.c.state).where(intents.c.tag==tag).with_for_update()).first()
+            if not row or row.state!="RESERVED":
+                raise ValueError("Only an unsent reservation can be aborted")
+            db.execute(update(intents).where(intents.c.tag==tag).values(state="ABORTED",updated_at=at))
+            self._event(db,tag,"ABORTED","Unsent entry no longer authorized or fresh",at)
+
     def apply_broker_report(self, report: dict, at: datetime) -> None:
         tag, filled = report["tag"], report["filled_quantity"]
         with self.lock, self.engine.begin() as db:
@@ -162,17 +171,27 @@ class LiveLedger:
             if not row or row["state"] == "RESERVED":
                 raise ValueError("Unknown or unsent intent")
             if (type(filled) is not int or not row["filled_quantity"] <= filled <= row["quantity"] or
-                    report["trading_symbol"] != f'{row["symbol"]}-EQ'):
+                    report["trading_symbol"] != f'{row["symbol"]}-EQ' or
+                    report.get("ordered_quantity") != row["quantity"] or
+                    not str(report.get("broker_order_id") or "").strip() or
+                    (row["broker_order_id"] and row["broker_order_id"]!=report["broker_order_id"])):
                 raise ValueError("Broker report conflicts with intent")
+            average=report.get("average_fill_price")
+            average=Decimal(str(average)) if average is not None else None
+            if filled and (average is None or not average.is_finite() or average<=0):
+                raise ValueError("Broker fill price is invalid")
+            if not filled:average=None
             state = "FILLED" if filled == row["quantity"] else "PARTIAL" if filled else "ACKNOWLEDGED"
             if str(report["status"]).lower() in {"rejected", "cancelled", "canceled"}:
                 state = "REJECTED" if not filled else "PARTIAL_CANCELLED"
             elif row["state"] == "CANCEL_PENDING" and filled < row["quantity"]:
                 state = "CANCEL_PENDING"
+            if row["state"] in {"FILLED","REJECTED","PARTIAL_CANCELLED","ABORTED"} and state!=row["state"]:
+                raise ValueError("Terminal broker state cannot regress")
             stamp = at
             db.execute(update(intents).where(intents.c.tag == tag).values(state=state,
                 broker_order_id=report["broker_order_id"], filled_quantity=filled,
-                average_fill_price=Decimal(str(report["average_fill_price"])), updated_at=stamp))
+                average_fill_price=average, updated_at=stamp))
             if filled != row["filled_quantity"] or state != row["state"]:
                 self._event(db, tag, state, "Kotak report reconciled", stamp)
 
@@ -181,6 +200,15 @@ class LiveLedger:
             rows = db.execute(select(intents).where(
                 intents.c.session_date == session_date).order_by(intents.c.id)).mappings()
             return [dict(row) for row in rows]
+
+    def prior_session_recovery_count(self, day: date) -> int:
+        """Uncertain submissions or unclosed fills from an earlier day block entries."""
+        with self.engine.connect() as db:
+            rows=db.execute(select(intents).where(intents.c.session_date<day)).mappings().all()
+        exits={(r['session_date'],r['symbol']):r['filled_quantity'] for r in rows if r['phase']=='EXIT'}
+        return sum(1 for r in rows if r['state'] in {
+            'RESERVED','SUBMISSION_UNKNOWN','ACKNOWLEDGED','PARTIAL','CANCEL_PENDING'} or (
+            r['phase']=='ENTRY' and r['filled_quantity']>exits.get((r['session_date'],r['symbol']),0)))
 
     def read_settings(self) -> dict[str, str]:
         with self.engine.connect() as db:
