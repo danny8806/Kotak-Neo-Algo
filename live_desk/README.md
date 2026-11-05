@@ -1,6 +1,6 @@
 # Kotak Live Dashboard
 
-The live app receives the daily research report, monitors Dhan market data, applies the ORB rule, sends qualifying orders to Kotak Neo, and displays actual Kotak orders, fills and positions.
+The live app receives the daily research report, maps its symbols to Dhan NSE EQ IDs, reads each 09:15 one-minute opening candle, and monitors Dhan ticks for a directional ORB break. If Kotak credentials are absent, Dhan mapping and ORB monitoring still run read-only; Kotak mapping, order readiness, and live order submission remain blocked.
 
 ## One direct daily path
 

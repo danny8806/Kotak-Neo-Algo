@@ -75,6 +75,10 @@ class LiveSupervisor:
         self.runtime=None
         self.dhan_ids={}
         self.kotak_ids={}
+        self.opening_ranges={}
+        self.orb_events={}
+        self._orb_previous={}
+        self._orb_last_tick={}
         self.quote_data={}
         self.last_quote_at=None
         self.last_book_at=None
@@ -152,6 +156,10 @@ class LiveSupervisor:
             self.report_sha=None
             self.dhan_ids={}
             self.kotak_ids={}
+            self.opening_ranges={}
+            self.orb_events={}
+            self._orb_previous={}
+            self._orb_last_tick={}
             self.quote_data={}
             self.last_book_at=None
             self.last_quote_at=None
@@ -223,6 +231,11 @@ class LiveSupervisor:
         if now.weekday()>=5 or now.time()<START:
             return
         if self.runtime:return
+        if self.ticker:
+            if self.broker is None:
+                return
+            self.ticker.stop()
+            self.ticker=None
         if not self.dhan or not self.dhan.token:
             self.status="DHAN_AUTHENTICATING"
             return
@@ -233,23 +246,30 @@ class LiveSupervisor:
         dhan=self.master_fetch(wanted,now=now)
         if dhan.session_date!=now.date().isoformat() or set(dhan.security_ids)!=wanted:
             raise RuntimeError("NSE EQ Dhan symbol master incomplete")
-        kotak={s:lookup_kotak_equity(self.broker,s) for s in wanted}
         opening={}
         for symbol,id_ in dhan.security_ids.items():
             opening[symbol]=opening_range(self.dhan,id_,now.date(),
                                            timestamp_mode=self.policy.timestamp_mode)
-        runtime=LiveRuntime(
-            session_date=now.date(),signals=candidates,dhan_ids=dhan.security_ids,
-            kotak_instruments=kotak,opening_ranges=opening,
-            policy=self.policy,ledger=self.ledger,broker=self.broker,
-            enabled=False,clock=self.now)
+        kotak={}
+        runtime=None
+        if self.broker is not None:
+            kotak={s:lookup_kotak_equity(self.broker,s) for s in wanted}
+            runtime=LiveRuntime(
+                session_date=now.date(),signals=candidates,dhan_ids=dhan.security_ids,
+                kotak_instruments=kotak,opening_ranges=opening,
+                policy=self.policy,ledger=self.ledger,broker=self.broker,
+                enabled=False,clock=self.now)
         ticker=self.ticker_factory(self.dhan,dhan.security_ids,self.on_tick)
         with self.lock:
             self.runtime=runtime
             self.ticker=ticker
             self.dhan_ids=dhan.security_ids
             self.kotak_ids=kotak
-            self.status="MONITORING_LIVE"
+            self.opening_ranges=opening
+            self._orb_previous={}
+            self._orb_last_tick={}
+            self.orb_events={}
+            self.status="MONITORING_LIVE" if runtime else "MONITORING_DHAN_ORB_KOTAK_PENDING"
         ticker.start()
 
     def _broker_cash(self):
@@ -321,11 +341,43 @@ class LiveSupervisor:
             ready=self.armed and self._health_check_locked(now)
             if self.runtime:self.runtime.enabled=ready
             runtime=self.runtime
+        self._observe_orb_crossing(symbol,value,ts,now)
         if runtime and ready:
             # Real orders can be submitted only by the separately armed runtime.
             runtime.on_tick(tick)
         # Position exits follow the configured 15:15 IST square-off policy.
         # Loss limits disarm new entries; they do not create an implicit stop.
+
+    def _observe_orb_crossing(self,symbol,price,tick_at,now):
+        local=tick_at.astimezone(IST)
+        if (local.date().isoformat()!=self.session_date or local.time()<time(9,16) or
+            local.time()>self.policy.entry_cutoff or symbol not in self.opening_ranges):
+            return
+        with self.lock:
+            previous_at=self._orb_last_tick.get(symbol)
+            if previous_at and tick_at<previous_at:
+                return
+            previous=self._orb_previous.get(symbol)
+            self._orb_previous[symbol]=price
+            self._orb_last_tick[symbol]=tick_at
+            if previous is None or symbol in self.orb_events:
+                return
+            signal=self.report and next((x for x in self.report.get("signals",[])
+                                         if x["symbol"]==symbol),None)
+            if not signal:
+                return
+            high,low=self.opening_ranges[symbol]
+            side=signal["side"]
+            crossed=(side=="LONG" and previous<=high and price>high) or (
+                    side=="SHORT" and previous>=low and price<low)
+            if not crossed:
+                return
+            self.orb_events[symbol]={
+                "symbol":symbol,"side":side,"status":"ORB_BREAKOUT_OBSERVED",
+                "triggered_at":local.isoformat(timespec="seconds"),
+                "trigger_price":str(price),"orb_high":str(high),"orb_low":str(low),
+                "execution":"MONITOR_ONLY" if not self.runtime or not self.armed else "ARMED_RUNTIME",
+            }
 
     def _health_check_locked(self,now):
         if not self.allowed or not self.report or self.report["status"]!="READY":
@@ -417,17 +469,17 @@ class LiveSupervisor:
         self._refresh_vix_context(now)
         # Monitor the actual Kotak brokerage account even when news is missing.
         # No signals must NEVER be interpreted as fabricated positions.
+        kotak_missing=False
         if self.broker is None:
             if self.kotak_from_environment:
                 try:
                     KotakCredentials.from_environment()
                 except ValueError:
-                    with self.lock:
-                        self.status="NEEDS_KOTAK_CREDENTIALS"
-                        self.error=None
-                    return
-            self.broker=self.kotak_factory()
-        if self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH:
+                    kotak_missing=True
+                    with self.lock:self.status="NEEDS_KOTAK_CREDENTIALS"
+            if not kotak_missing:
+                self.broker=self.kotak_factory()
+        if self.broker is not None and (self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH):
             self.refresh_broker()
         has_report=self._load_report()
         if has_report:
@@ -437,7 +489,14 @@ class LiveSupervisor:
             elif self.dhan is None:
                 self.status="NEEDS_DHAN_CREDENTIALS"
         else:
-            self.disarm("No qualified current-session signals")
+            if not kotak_missing:
+                self.disarm("No qualified current-session signals")
+            else:
+                with self.lock:
+                    self.armed=False
+                    self.session_authorized=False
+                    if self.runtime:self.runtime.enabled=False
+                    self.status="NEEDS_KOTAK_CREDENTIALS"
         self._manage_authorized_exits(now)
         if self.armed and not self.ready():
             self.disarm("Broker or market data health degraded")
@@ -492,8 +551,16 @@ class LiveSupervisor:
                     "dhan_security_id":self.dhan_ids.get(symbol),
                     "kotak_trading_symbol":self.kotak_ids[symbol].trading_symbol if symbol in self.kotak_ids else None,
                     "kotak_token":self.kotak_ids[symbol].token if symbol in self.kotak_ids else None,
-                    "status":"READY" if symbol in self.dhan_ids and symbol in self.kotak_ids else "UNAVAILABLE"
+                    "status":"READY" if symbol in self.dhan_ids and symbol in self.kotak_ids else
+                            "DHAN_READY_KOTAK_PENDING" if symbol in self.dhan_ids else "UNAVAILABLE"
                 } for symbol in sorted({row["symbol"] for row in signals})],
+                "orb_monitor":{
+                    "state":"MONITORING" if self.ticker and self.opening_ranges else "NOT_STARTED",
+                    "opening_ranges":[{"symbol":symbol,"high":str(values[0]),"low":str(values[1])}
+                                      for symbol,values in sorted(self.opening_ranges.items())],
+                    "breakouts":list(self.orb_events.values()),
+                    "order_submission_enabled":bool(self.armed and self.runtime),
+                },
                 "research_cutoff_at":self.report.get("news_cutoff_at") if self.report else None,
                 "report_hash":self.report_sha,"armed":self.armed,
                 "session_authorized":self.session_authorized,

@@ -5,6 +5,8 @@ is submitted and no research signals are published.
 """
 from __future__ import annotations
 import os
+import json
+import hashlib
 import unittest
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -13,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-from bridge.app import create_app
+from bridge.app import create_app, reports
 from live_desk.app import create_live_app
 from live_desk.broker_view import positions as parse_positions
 from live_desk.kotak_instruments import KotakInstrument
@@ -170,6 +172,79 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertIsNone(desk.error)
         self.assertIsNone(desk.broker)
         self.assertFalse(desk.armed)
+
+    def test_real_dhan_mapping_and_orb_monitor_continue_without_kotak(self):
+        from live_desk.dhan_instruments import DhanMasterSnapshot
+        from live_desk.orb import IST as ORB_IST
+        from datetime import datetime as dt
+        from unittest.mock import patch
+
+        report={"schema_version":"1.0","status":"READY","market":"NSE",
+            "timezone":"Asia/Kolkata","session_date":"2026-11-04",
+            "news_cutoff_at":"2026-11-04T09:00:00+05:30",
+            "generated_at":"2026-11-04T09:03:00+05:30","execution_enabled":False,
+            "signals":[{"symbol":"TESTA","side":"LONG","rank":1,
+                "reason":"Verified company event supports positive directional bias.",
+                "news_summary":"A verified company filing provides a positive catalyst.",
+                "first_available_at":"2026-11-03T16:00:00+05:30",
+                "sources":[{"url":"https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+                    "title":"Issuer filing","published_at":"2026-11-03T16:00:00+05:30"}]}]}
+        raw=json.dumps(report,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+        with self.bridge.state.engine.begin() as db:
+            db.execute(reports.insert().values(session_date="2026-11-04",
+                idempotency_key="dhan-orb-monitor-test",sha256=hashlib.sha256(raw.encode()).hexdigest(),
+                status="READY",received_at=TODAY,original_json=raw))
+
+        class Dhan:
+            token="test-authenticated-token"
+            def get_ohlc(self,securities,exchange_segment="NSE_EQ"):
+                return {}
+            def get_intraday(self,security_id,start,end,interval="1"):
+                candle=dt(2026,11,4,9,16,tzinfo=ORB_IST)
+                return {"timestamp":[int(candle.timestamp())],"open":[98],"high":[100],
+                    "low":[95],"close":[99],"volume":[100]}
+
+        class Auth:
+            def snapshot(self):return {"state":"AUTHENTICATED"}
+            def stop(self):pass
+
+        class Ticker:
+            def __init__(self,dhan,ids,callback):self.ids=ids;self.callback=callback;self.state="NOT_STARTED"
+            def start(self):self.state="CONNECTED"
+            def stop(self):self.state="STOPPED"
+            def snapshot(self):return {"state":self.state}
+
+        ticker_box={}
+        def make_ticker(dhan,ids,callback):
+            ticker_box["ticker"]=Ticker(dhan,ids,callback);return ticker_box["ticker"]
+        master=lambda symbols,now:DhanMasterSnapshot(now.date().isoformat(),now,"master-sha",
+            {symbol:"12345" for symbol in symbols})
+        keys=("KOTAK_NEO_CONSUMER_KEY","KOTAK_NEO_MOBILE_NUMBER","KOTAK_NEO_UCC",
+              "KOTAK_NEO_MPIN","KOTAK_NEO_TOTP_SECRET")
+        with patch.dict(os.environ,{**{key:"" for key in keys},"LIVE_ORDERS_ALLOWED":"NO"}):
+            desk=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=self.clock,
+                master_fetch=master,ticker_factory=make_ticker)
+            self.addCleanup(desk.stop)
+            desk.dhan=Dhan();desk.dhan_auth=Auth()
+            desk.cycle()
+            self.assertEqual(desk.status,"MONITORING_DHAN_ORB_KOTAK_PENDING")
+            self.assertEqual(desk.dhan_ids,{"TESTA":"12345"})
+            self.assertEqual(desk.opening_ranges["TESTA"],(Decimal("100"),Decimal("95")))
+            self.assertIsNone(desk.runtime)
+            self.assertEqual(ticker_box["ticker"].state,"CONNECTED")
+            self.assertFalse(desk.armed)
+            self.assertFalse(desk.ready())
+            ticker_box["ticker"].callback({"symbol":"TESTA","ltp":"100","timestamp":TODAY})
+            self.assertIn("TESTA",desk.quote_data,"fresh Dhan callback did not reach supervisor")
+            ticker_box["ticker"].callback({"symbol":"TESTA","ltp":"100.01",
+                "timestamp":TODAY.replace(second=1)})
+            self.assertEqual(desk._orb_previous.get("TESTA"),Decimal("100.01"),
+                f"tick processing stopped early: ids={desk.dhan_ids}, ranges={desk.opening_ranges}")
+            event=desk.snapshot()["orb_monitor"]["breakouts"][0]
+            self.assertEqual(event["status"],"ORB_BREAKOUT_OBSERVED")
+            self.assertEqual(event["side"],"LONG")
+            self.assertEqual(event["execution"],"MONITOR_ONLY")
+            self.assertEqual(desk.ledger.snapshot(TODAY.date()),[])
 
     def test_operator_disarm_clears_entry_gate(self):
         self.supervisor.armed=True
