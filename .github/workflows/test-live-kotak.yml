@@ -1,0 +1,114 @@
+name: Kotak Neo live-only terminal tests
+
+on:
+  push:
+    branches: [feature/live-kotak-news-desk, main]
+    paths:
+      - 'live_desk/**'
+      - 'tests/test_live_kotak_terminal.py'
+      - 'tests/test_live_market_timestamp.py'
+      - 'requirements-live*.txt'
+      - '.github/workflows/test-live-kotak.yml'
+  pull_request:
+    paths:
+      - 'live_desk/**'
+      - 'tests/test_live_kotak_terminal.py'
+      - 'tests/test_live_market_timestamp.py'
+      - 'requirements-live*.txt'
+      - '.github/workflows/test-live-kotak.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-only-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://kotak:ci-password@localhost:5432/kotak_ci
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: kotak_ci
+          POSTGRES_USER: kotak
+          POSTGRES_PASSWORD: ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kotak -d kotak_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated live terminal test dependencies
+        run: python -m pip install -r requirements-live-test.txt
+      - name: Verify PostgreSQL advisory-lock concurrency
+        env:
+          LIVE_TEST_POSTGRES_URL: postgresql+psycopg://kotak:ci-password@localhost:5432/kotak_ci
+        run: python scripts/test_postgres_ledger.py
+      - name: Run all signal and live-only safety tests
+        run: python -m unittest discover -s tests -v
+      - name: Compile live Kotak backend
+        run: python -m compileall -q live_desk bridge scripts
+      - name: Parse dashboard JavaScript
+        run: node --check live_desk/static/app.js
+      - name: Start real live terminal without credentials
+        shell: bash
+        run: |
+          export SIGNAL_DATABASE_URL="postgresql+psycopg://kotak:ci-password@localhost:5432/kotak_ci"
+          export LIVE_DATABASE_URL="$SIGNAL_DATABASE_URL"
+          export SIGNAL_BRIDGE_TOKEN="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')"
+          export DASHBOARD_PASSWORD="CI-only-dashboard-Password-2026!"
+          export DASHBOARD_SESSION_SECRET="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')"
+          export DASHBOARD_COOKIE_SECURE=false
+          export LIVE_ORDERS_ALLOWED=NO
+          export LIVE_HOST=127.0.0.1
+          export LIVE_PORT=8010
+          python -m live_desk.app > /tmp/live-kotak-ci.log 2>&1 &
+          worker=$!
+          trap 'kill "$worker" 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import time
+          from urllib.request import urlopen
+          from urllib.error import HTTPError, URLError
+          base="http://127.0.0.1:8010"
+          for _ in range(30):
+              try:
+                  with urlopen(base+"/health",timeout=2) as response:
+                      assert response.status==200
+                      body=response.read()
+                      assert b'LIVE_ONLY' in body
+                      assert b'"orders_armed":false' in body
+                  break
+              except URLError:
+                  time.sleep(0.4)
+          else:
+              raise RuntimeError("Live service could not start")
+          try:
+              urlopen(base+"/api/state",timeout=2)
+          except HTTPError as e:
+              assert e.code==401, e.code
+          else:
+              raise AssertionError("Unauthenticated account data exposed")
+          with urlopen(base+"/login",timeout=2) as response:
+              assert response.status==200
+          with urlopen(base+"/static/app.js",timeout=2) as response:
+              assert response.status==200
+          try:
+              urlopen(base+"/ready",timeout=2)
+          except HTTPError as e:
+              assert e.code==503, e.code
+          else:
+              raise AssertionError("Unconfigured live orders appeared ready")
+          print("HTTP smoke: live-only mode, authentication, assets, and safe disabled state PASSED")
+          PY
+      - name: Build deployable Kotak Neo container
+        run: docker build -f live_desk/Dockerfile -t news-kotak-live:ci .

@@ -1,0 +1,57 @@
+# Bind to loopback; expose externally only behind an audited HTTPS reverse proxy.
+# Default LIVE_ORDERS_ALLOWED is NO: broker monitoring requires no live orders.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kotak_live
+      POSTGRES_USER: kotak
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a private URL-safe PostgreSQL password}
+    volumes:
+      - kotak-live-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kotak -d kotak_live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  kotak-live-news:
+    build:
+      context: ..
+      dockerfile: live_desk/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SIGNAL_DATABASE_URL: postgresql+psycopg://kotak:${POSTGRES_PASSWORD:?Set a private URL-safe PostgreSQL password}@postgres/kotak_live
+      LIVE_DATABASE_URL: postgresql+psycopg://kotak:${POSTGRES_PASSWORD:?Set a private URL-safe PostgreSQL password}@postgres/kotak_live
+      SIGNAL_BRIDGE_TOKEN: ${SIGNAL_BRIDGE_TOKEN:?Set a private random 32+ char secret}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?Set a strong dashboard password}
+      DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET:?Set random 32+ char session secret}
+      DASHBOARD_COOKIE_SECURE: ${DASHBOARD_COOKIE_SECURE:-true}
+      DASHBOARD_PUBLIC_ORIGIN: ${DASHBOARD_PUBLIC_ORIGIN:-}
+      LIVE_HOST: 0.0.0.0
+      LIVE_PORT: "8010"
+      LIVE_ORDERS_ALLOWED: ${LIVE_ORDERS_ALLOWED:-NO}
+      KOTAK_NEO_CONSUMER_KEY: ${KOTAK_NEO_CONSUMER_KEY:-}
+      KOTAK_NEO_MOBILE_NUMBER: ${KOTAK_NEO_MOBILE_NUMBER:-}
+      KOTAK_NEO_UCC: ${KOTAK_NEO_UCC:-}
+      KOTAK_NEO_MPIN: ${KOTAK_NEO_MPIN:-}
+      KOTAK_NEO_TOTP_SECRET: ${KOTAK_NEO_TOTP_SECRET:-}
+      LIVE_ARM_TOTP_SECRET: ${LIVE_ARM_TOTP_SECRET:-}
+      DHAN_CLIENT_ID: ${DHAN_CLIENT_ID:-}
+      DHAN_PIN: ${DHAN_PIN:-}
+      DHAN_TOTP_SECRET: ${DHAN_TOTP_SECRET:-}
+      DHAN_VIX_SECURITY_ID: ${DHAN_VIX_SECURITY_ID:-21}
+    ports:
+      - "127.0.0.1:8010:8010"
+    volumes:
+      - kotak-live-private:/data
+    healthcheck:
+      test: ["CMD","python","-c","import urllib.request;urllib.request.urlopen('http://127.0.0.1:8010/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  kotak-live-postgres:

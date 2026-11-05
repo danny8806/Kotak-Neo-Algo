@@ -1,0 +1,39 @@
+# This binds only to localhost for safety. Put a TLS reverse proxy in front
+# of the service before accepting connections from external cloud clients.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kotak_live
+      POSTGRES_USER: kotak
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a private URL-safe PostgreSQL password}
+    volumes:
+      - signal-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kotak -d kotak_live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  signal-bridge:
+    build:
+      context: ..
+      dockerfile: bridge/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SIGNAL_DATABASE_URL: postgresql+psycopg://kotak:${POSTGRES_PASSWORD:?Set a private URL-safe PostgreSQL password}@postgres/kotak_live
+      SIGNAL_BRIDGE_TOKEN: ${SIGNAL_BRIDGE_TOKEN:?Set a random 32+ character secret in your shell or .env file}
+      SIGNAL_BRIDGE_HOST: 0.0.0.0
+      SIGNAL_BRIDGE_PORT: 8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  signal-postgres:

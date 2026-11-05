@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "exchange_timezone": "Asia/Kolkata",
+  "opening_candle_start": "09:15",
+  "entry_cutoff": "10:00",
+  "exit_time": "15:15",
+  "max_long_positions": 5,
+  "max_short_positions": 5,
+  "max_open_positions": 10,
+  "allocation_per_position_inr": 100000,
+  "gross_cap_inr": 1000000,
+  "stop_loss": null,
+  "dhan_candle_timestamp_mode": "end"
+}

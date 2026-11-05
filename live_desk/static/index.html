@@ -1,0 +1,50 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Kotak Neo · LIVE News Trading</title><link rel="stylesheet" href="/static/styles.css"/></head>
+<body><header><div class="logo"><div class="diamond">KN</div><div><strong>Kotak Neo · News Trading</strong><small>Real broker positions • verified news signals • NSE cash</small></div></div><div class="right"><span class="pill red" id="mode">REAL MONEY · DISARMED</span><span class="pill" id="source">SIGNAL UNAVAILABLE</span><span class="pill" id="connection">CONNECTING</span><button id="logout">Sign out</button></div></header>
+<main>
+<div class="notice" id="notice" role="status">Loading live broker and research status. Real orders are DISABLED unless the operator explicitly arms a verified session.</div>
+<div class="grid">
+<div class="metric"><div class="name">Session</div><div class="value" id="session">—</div><div class="desc">IST trading day</div></div>
+<div class="metric"><div class="name">Broker funds</div><div class="value" id="funds">—</div><div class="desc">Kotak Neo reported available funds</div></div>
+<div class="metric"><div class="name">Open positions</div><div class="value" id="posCount">—</div><div class="desc">Actual broker quantities</div></div>
+<div class="metric"><div class="name">Open gross MTM</div><div class="value" id="mtm">—</div><div class="desc">Broker quantities + available live prices</div></div>
+<div class="metric"><div class="name">Verified candidates</div><div class="value" id="count">—</div><div class="desc">Up to 10 LONG + 10 SHORT</div></div>
+<div class="metric"><div class="name">India VIX</div><div class="value" id="vix">—</div><div class="desc" id="vixAsOf">Dhan index context; not a trade trigger</div></div>
+<div class="metric"><div class="name">Risk controls</div><div class="value" id="risk">BLOCKED</div><div class="desc" id="riskReason">Checking live feeds</div></div>
+</div>
+<div class="split">
+<section class="panel"><div class="heading"><div><b>9:00 AM news signals</b><div class="intro">Read from authenticated direct API • current session only</div></div><span class="pill" id="cutoff">Cutoff —</span></div>
+<div class="table-scroll"><table><thead><tr><th>#</th><th>Stock</th><th>Direction</th><th>Live LTP</th><th>Open</th><th>Change %</th></tr></thead><tbody id="signalBody"><tr><td class="empty" colspan="6">Waiting for verified signals</td></tr></tbody></table></div></section>
+<section class="panel"><div class="heading"><b>News evidence</b><span class="pill" id="selected">SELECT A STOCK</span></div><div id="evidence" class="detail"><div class="muted">Select a stock from the watchlist to inspect the research explanation and original source URLs.</div></div></section>
+</div>
+<section class="panel"><div class="heading"><div><b>Verified broker instrument mapping</b><div class="intro" id="mappingInfo">Waiting for Dhan and Kotak mappings</div></div></div>
+<div class="table-scroll"><table><thead><tr><th>Signal symbol</th><th>Dhan NSE ID</th><th>Kotak NSE trading symbol</th><th>Kotak token</th><th>Status</th></tr></thead><tbody id="mappingBody"><tr><td colspan="5" class="empty">Mappings appear after today’s signal report is verified.</td></tr></tbody></table></div></section>
+<section class="panel"><div class="heading"><div><b>Live trading settings</b><div class="intro">Changes save to this server and apply to the current session. Disarm before saving.</div></div><span class="pill red" id="settingsState">DISARMED REQUIRED</span></div>
+<form id="settingsForm" class="settings-grid">
+<label>Rupees per stock<input id="settingAllocation" type="number" min="1000" max="20000000" step="1000" required/></label>
+<label>Maximum open stocks<input id="settingMaxPositions" type="number" min="1" max="10" step="1" required/></label>
+<label>Total gross cap (₹)<input id="settingGross" type="number" min="1000" max="100000000" step="1000" required/></label>
+<label>Maximum LONG stocks<input id="settingMaxLong" type="number" min="1" max="5" step="1" required/></label>
+<label>Maximum SHORT stocks<input id="settingMaxShort" type="number" min="1" max="5" step="1" required/></label>
+<label>Stop new entries at<input id="settingCutoff" type="time" required/></label>
+<label>Exit positions at<input id="settingExit" type="time" required/></label>
+<div><button id="saveSettings" class="primary" type="submit">Save live settings</button></div>
+</form><p class="meta" id="settingsMessage">Default settings are loaded from the live service.</p></section>
+<div class="split">
+<section class="panel"><div class="heading"><div><b>LIVE Kotak positions</b><div class="intro">Kotak Neo broker-reported net quantities</div></div><span id="positionsAsOf" class="meta">—</span></div>
+<div class="table-scroll"><table><thead><tr><th>Symbol</th><th>Side</th><th class="right-align">Net quantity</th><th class="right-align">LTP</th><th class="right-align">Gross MTM</th></tr></thead><tbody id="positionBody"><tr><td colspan="5" class="empty">Kotak positions unavailable</td></tr></tbody></table></div></section>
+<section class="panel"><div class="heading"><b>Live execution & risk gate</b><span id="gate" class="pill red">DISARMED</span></div>
+<div class="detail"><div><b>Execution policy</b><p class="muted" id="policy">9:15 one-minute opening range • fresh tick breakout • daily caps</p></div>
+<div><b>Connection diagnostics</b><p id="diagnostics" class="meta">Waiting for Dhan and Kotak Neo authentication</p></div>
+<div class="alert">This dashboard is for actual-money Kotak Neo orders. The research JSON is NOT an order command. Only real Kotak Neo positions and order reports are supported. Operator arming is locked until prerequisites and broker checks pass. Never arm with unverified risk settings.</div>
+<div class="control"><button id="arm" class="primary" disabled>Arm real-money orders</button><button id="disarm" class="danger">Disarm new entries</button></div>
+<div class="status" id="armNotice">Real-money order submission is disabled by default.</div></div></section>
+</div>
+<div class="two">
+<section class="panel"><div class="heading"><b>Real Kotak order book</b><span class="meta" id="orderCount">—</span></div>
+<div class="table-scroll"><table><thead><tr><th>Broker order ID</th><th>Symbol</th><th>Side</th><th class="right-align">Qty</th><th>Status</th></tr></thead><tbody id="orderBody"><tr><td colspan="5" class="empty">No broker orders received</td></tr></tbody></table></div></section>
+<section class="panel"><div class="heading"><b>Real executed fills</b><span class="meta" id="fillCount">—</span></div>
+<div class="table-scroll"><table><thead><tr><th>Fill ID</th><th>Symbol</th><th class="right-align">Qty</th><th class="right-align">Fill price</th><th>Time</th></tr></thead><tbody id="fillBody"><tr><td colspan="5" class="empty">No broker fills received</td></tr></tbody></table></div></section></div>
+<section class="panel"><div class="heading"><b>Live audit & errors</b><span class="meta" id="updated">—</span></div><div class="detail"><p class="meta" id="errors">No status received.</p><p class="meta" id="intentInfo">Orders from the durable intent ledger will appear only after broker reporting.</p></div></section>
+<div class="foot">LIVE ONLY · No model-based or synthetic positions. Only broker-reported executions. Kotak broker reports are authoritative. Private credentials must stay on the server.</div></main>
+<div class="modal-bg" id="armModal"><div class="modal" role="dialog" aria-modal="true" aria-label="Authorize live orders"><h2>Authorize real-money orders</h2><p class="muted">This operation can submit actual Kotak Neo orders to your account. Confirm session limits and broker connectivity first.</p><form id="armForm"><label for="authorization">Type the exact authorization phrase</label><input id="authorization" autocomplete="off" required placeholder="I AUTHORIZE LIVE KOTAK ORDERS"/><label for="otp">Operator TOTP (6 digits)</label><input id="otp" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" required/><div class="modal-actions"><button type="button" id="cancelArm">Cancel</button><button type="submit" class="danger">Authorize real orders</button></div><p id="armError" class="negative" role="alert"></p></form></div></div>
+<script src="/static/app.js" defer></script></body></html>

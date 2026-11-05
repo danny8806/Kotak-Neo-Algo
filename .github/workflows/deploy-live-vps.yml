@@ -1,0 +1,75 @@
+name: Deploy Kotak live-only dashboard to existing VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/**'
+      - 'tests/test_vps_bootstrap.py'
+      - 'live_desk/**'
+      - 'bridge/**'
+      - 'scripts/validate_signals.py'
+      - 'requirements-live.txt'
+      - 'requirements-live-test.txt'
+      - 'requirements-bridge.txt'
+      - '.github/workflows/deploy-live-vps.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kotak-live-vps-monitoring
+  cancel-in-progress: false
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://kotak:ci-password@localhost:5432/kotak_ci
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: kotak_ci
+          POSTGRES_USER: kotak
+          POSTGRES_PASSWORD: ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kotak -d kotak_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install application test requirements
+        run: python -m pip install -r requirements-live-test.txt
+      - name: Verify PostgreSQL advisory-lock concurrency
+        env:
+          LIVE_TEST_POSTGRES_URL: postgresql+psycopg://kotak:ci-password@localhost:5432/kotak_ci
+        run: python scripts/test_postgres_ledger.py
+      - name: Verify real-only signal and live supervisor regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Check Python, browser JavaScript, deployment shell
+        run: |
+          python -m compileall -q live_desk bridge scripts
+          python -m py_compile ops/bootstrap_deploy_access.py
+          node --check live_desk/static/app.js
+          bash -n ops/deploy_live_vps.sh
+          bash -n ops/activate_live_vps.sh
+          bash -n ops/retire_old_dashboard.sh
+      - name: Deploy separate live-only service over pinned SSH (starts disarmed)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          bash ops/deploy_live_vps.sh
+          echo 'LIVE-ONLY MONITORING DEPLOYMENT: VPS local health and auth checks passed.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The service starts disarmed. Order permission depends on private LIVE_ORDERS_ALLOWED configuration; live broker login and HTTPS routing are not verified.' >> "$GITHUB_STEP_SUMMARY"
