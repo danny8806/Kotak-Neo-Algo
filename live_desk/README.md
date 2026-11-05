@@ -8,6 +8,8 @@ The live app receives the daily research report, monitors Dhan market data, appl
 2. The scheduled task's authorized HTTPS action POSTs the report directly to `https://<dashboard-host>/api/v1/signals/incoming` using the bridge Bearer token and idempotency key.
 
 Signal intake is restricted to the official Nifty 500 constituent snapshot in `nifty500_universe.json`; the live dashboard refuses out-of-universe candidates. Refresh this checked snapshot before each release with `python scripts/refresh_nifty500_universe.py`. The 45-day freshness limit fails closed if it is neglected.
+
+The operational trading snapshot keeps standard NSE `EQ` series with Indian `INE` equity ISINs. REIT units, trade-to-trade series and placeholder rows remain visible in the full constituent audit but are excluded from eligible trading symbols.
 3. The bridge validates the date, cutoff, sources and JSON contract, stores the report and returns `ACCEPTED` or `DUPLICATE`. The task checks the status and hash. No verified receipt means no entry signals.
 4. The supervisor resolves current NSE cash-equity mappings, reads the 09:15 Dhan candle and listens for fresh Dhan ticks.
 5. LONG qualifies on a direct cross above the candle high; SHORT qualifies on a direct cross below its low. The system uses whole-share MIS market orders and reconciles fills from Kotak's reports. Configured square-off is 15:15 IST.

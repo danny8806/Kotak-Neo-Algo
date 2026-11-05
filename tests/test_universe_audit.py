@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from live_desk.universe import audit_nifty500, load_nifty500_symbols, parse_nifty500
+from live_desk.universe import (audit_nifty500, eligible_nifty500_symbols,
+                                load_nifty500_symbols, parse_nifty500)
 
 
 class Nifty500UniverseAuditTests(unittest.TestCase):
@@ -43,6 +44,14 @@ class Nifty500UniverseAuditTests(unittest.TestCase):
                b"A Ltd,IT,AAA,EQ,INE000A01000\nA Ltd,IT,AAA,EQ,INE000A01000\n")
         with self.assertRaisesRegex(ValueError, "duplicate"):
             parse_nifty500(raw)
+
+    def test_operational_universe_keeps_only_real_nse_eq_stocks(self):
+        raw = (b"Company Name,Industry,Symbol,Series,ISIN Code\n"
+               b"A Ltd,IT,AAA,EQ,INE000A01000\n"
+               b"A REIT,Realty,AREIT,RR,INE000B01000\n"
+               b"B Ltd,Telecom,BBB,BE,INE000C01000\n"
+               b"Placeholder,Capital Goods,DUMMY,EQ,DUM000D01000\n")
+        self.assertEqual(eligible_nifty500_symbols(parse_nifty500(raw)), {"AAA"})
 
     def test_naive_audit_clock_rejected(self):
         with self.assertRaisesRegex(ValueError, "timezone-aware"):

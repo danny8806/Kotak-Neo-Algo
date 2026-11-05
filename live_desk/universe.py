@@ -53,6 +53,16 @@ def parse_nifty500(raw: bytes) -> list[Constituent]:
     return constituents
 
 
+def eligible_nifty500_symbols(constituents: Iterable[Constituent]) -> set[str]:
+    """Return standard NSE EQ-share constituents suitable for this cash strategy.
+
+    The official constituent feed can include REIT units, trade-to-trade series,
+    and placeholder rows. Keep those out of the regular NSE EQ order universe.
+    """
+    return {item.symbol for item in constituents
+            if item.series == "EQ" and item.isin.startswith("INE")}
+
+
 def load_nifty500_symbols(path: str | Path, *, now: datetime | None = None,
                           max_age: timedelta = timedelta(days=45)) -> set[str]:
     """Load a previously fetched official constituent snapshot, failing closed if stale."""
