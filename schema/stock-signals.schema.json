@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/danny8806/Indian-Market-Intelligence-AI/blob/main/schema/stock-signals.schema.json",
+  "title": "Indian Market Intelligence Research Signals v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "market",
+    "timezone",
+    "session_date",
+    "news_cutoff_at",
+    "generated_at",
+    "execution_enabled",
+    "signals"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "READY",
+        "NO_TRADE",
+        "UNAVAILABLE"
+      ]
+    },
+    "market": {
+      "const": "NSE"
+    },
+    "timezone": {
+      "const": "Asia/Kolkata"
+    },
+    "session_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "news_cutoff_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "generated_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "execution_enabled": {
+      "const": false
+    },
+    "sample": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "signals": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/signal"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "READY"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "signals": {
+            "minItems": 1
+          },
+          "session_date": {
+            "type": "string"
+          },
+          "news_cutoff_at": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "NO_TRADE",
+              "UNAVAILABLE"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "signals": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "title",
+        "published_at"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 3
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "side",
+        "rank",
+        "reason",
+        "news_summary",
+        "first_available_at",
+        "sources"
+      ],
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9&._-]{0,29}$"
+        },
+        "side": {
+          "enum": [
+            "LONG",
+            "SHORT"
+          ]
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 15
+        },
+        "news_summary": {
+          "type": "string",
+          "minLength": 15
+        },
+        "first_available_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  }
+}

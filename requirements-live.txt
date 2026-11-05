@@ -1,0 +1,2 @@
+-r requirements-live-test.txt
+kotakneoapi>=3,<4
