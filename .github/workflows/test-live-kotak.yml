@@ -112,3 +112,11 @@ jobs:
           PY
       - name: Build deployable Kotak Neo container
         run: docker build -f live_desk/Dockerfile -t news-kotak-live:ci .
+      - name: Validate production Compose volumes and configuration
+        env:
+          POSTGRES_PASSWORD: ci-only-postgres-password
+          SIGNAL_BRIDGE_TOKEN: ci-only-bridge-token-00000000000000000000
+          DASHBOARD_PASSWORD: ci-only-dashboard-password
+          DASHBOARD_SESSION_SECRET: ci-only-session-secret-00000000000000000000
+          LIVE_ORDERS_ALLOWED: NO
+        run: docker compose --project-name kotak-live-compose-check -f live_desk/compose.yaml config -q
