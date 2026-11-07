@@ -8,13 +8,13 @@ The [dashboard workspace guide](reports/dashboard-workspace-2026-11-05.md) cover
 
 ## Daily flow
 
-1. The Codex schedule runs at 09:02 IST on weekdays, follows [the task instructions](bridge/CODEX_TASK_PROMPT.md), and prepares up to five sourced LONG and five sourced SHORT signals.
-2. `node bridge/send_codex.js <report.json>` reads the HTTPS bridge URL and one bearer token from the ignored project `.env`, then sends the report to `https://deltacapitals.systems/api/v1/signals/incoming`.
-3. The bridge validates the date, timestamps, symbols and report format. The scheduler confirms `ACCEPTED` or `DUPLICATE`; otherwise it reports `NOT DELIVERED`.
-4. Dhan maps each NSE symbol, supplies the 09:15 one-minute candle and streams fresh prices. A LONG qualifies on a cross above the candle high; a SHORT qualifies on a cross below its low.
+1. The Codex schedule follows its existing weekday schedule and sends newly qualified symbols, up to five LONG and five SHORT for the session. The bridge accepts additional batches during the session.
+2. `node bridge/send_codex.js <report.json>` reads the HTTPS bridge URL and one bearer token from the ignored project `.env`, then sends each new batch to `https://deltacapitals.systems/api/v1/signals/incoming`.
+3. The bridge validates the date, timestamps, symbols and report format, then adds new symbols to today's signal list. The scheduler confirms `ACCEPTED` or `DUPLICATE`; otherwise it reports `NOT DELIVERED`.
+4. Dhan maps each new NSE symbol, supplies its 09:15 one-minute candle and subscribes it on the current live feed. A LONG qualifies on a cross above the candle high; a SHORT qualifies on a cross below its low.
 5. When the live session is enabled, ready and operator-armed, the supervisor applies sizing limits, sends qualifying MIS orders to Kotak Neo, and reconciles actual broker orders and fills. The configured square-off time is 15:15 IST.
 
-The report is a research watchlist, not an order instruction. A missing, late, invalid or non-`READY` report means no new entries.
+The report is a research watchlist, not an order instruction. Signals arriving after the configured entry cutoff are stored and monitored but cannot create new entries that session.
 
 ## Start the dashboard
 
@@ -40,7 +40,7 @@ Start a PostgreSQL 16 server and create the `kotak_live` database first. Use a U
 
 ## Codex scheduler setup
 
-The Codex automation is named **Daily Kotak signals to dashboard** and runs at 09:02 IST on weekdays. It uses the existing `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` entries in the ignored local `.env`; it does not need an OpenAI API key or a separate ChatGPT HTTP action. The project includes the small Node sender, so no Python install is needed for delivery.
+The Codex automation is named **Daily Kotak signals to dashboard** and follows its existing weekday schedule. It uses the existing `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` entries in the ignored local `.env`; it does not need an OpenAI API key or a separate ChatGPT HTTP action. The project includes the small Node sender, so no Python install is needed for delivery.
 
 The receiver is public at the HTTPS route above, with Nginx forwarding `/api/v1/` to the loopback-only live app. Signal submission uses the bridge token. Dashboard login and per-session operator arming protect account controls and live orders; the scheduler cannot arm orders.
 
@@ -50,7 +50,7 @@ Dhan supplies read-only market data; Kotak Neo is the order broker. Keep account
 
 Orders are disabled by default (`LIVE_ORDERS_ALLOWED=NO`). Live entries also require broker credentials, healthy Dhan/Kotak sessions, funds, exact mappings and a fresh opening candle. An operator must arm each session from the dashboard after these checks pass. The scheduler only sends research signals and cannot arm or place orders.
 
-The dashboard lets a disarmed operator customize per-stock allocation, total/per-side position caps, gross cap, entry cutoff and EOD exit time. Defaults are ₹1 lakh per stock, ten total positions, ₹10 lakh gross, 10:00 entry cutoff and 15:15 exit. Settings persist on the server and lock while orders are armed. Research accepts up to 10 candidates (five per side), all in the Nifty 500 universe; order limits still apply.
+The dashboard lets a disarmed operator customize per-stock allocation, total/per-side position caps, gross cap, entry cutoff and EOD exit time. Defaults are ₹1 lakh per stock, ten total positions, ₹10 lakh gross, 15:00 entry cutoff and 15:15 exit. Settings persist on the server and lock while orders are armed; existing saved server settings take precedence over these defaults. Research accepts up to 10 candidates (five per side), all in the Nifty 500 universe; order limits still apply.
 
 There is no stop-loss or daily-loss cutoff. A scheduled software square-off is not a broker-native protective order. The VPS smoke check verifies service health and access controls only; it does not authenticate a real Kotak account or submit a trade.
 

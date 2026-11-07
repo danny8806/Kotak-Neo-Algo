@@ -58,6 +58,32 @@ class LiveRuntime:
         self.submissions = ThreadPoolExecutor(max_workers=20, thread_name_prefix="kotak-order")
         self.pending: set[Future] = set()
 
+    def extend_signals(self, *, signals: list[dict], dhan_ids: dict[str, str],
+                       kotak_instruments: dict[str, KotakInstrument],
+                       opening_ranges: dict[str, tuple[Decimal, Decimal]]) -> set[str]:
+        """Add new same-session candidates after validating their broker maps and ORBs."""
+        incoming = {row["symbol"]: row for row in signals}
+        symbols = set(incoming)
+        if (not symbols or symbols != set(dhan_ids) or symbols != set(kotak_instruments)
+                or symbols != set(opening_ranges)):
+            raise ValueError("Every added signal needs exact Dhan/Kotak mapping and a completed ORB")
+        with self.lock:
+            additions = symbols - set(self.signals)
+            for symbol in symbols & set(self.signals):
+                if incoming[symbol]["side"] != self.signals[symbol]["side"]:
+                    raise ValueError(f"Signal direction changed during the session for {symbol}")
+            for symbol in additions:
+                instrument = kotak_instruments[symbol]
+                security_id = dhan_ids[symbol]
+                if (instrument.symbol != symbol or instrument.trading_symbol != f"{symbol}-EQ"
+                        or not instrument.token.isdecimal() or not security_id.isdecimal()):
+                    raise ValueError(f"Broker mapping does not match signal {symbol}")
+                self.signals[symbol] = incoming[symbol]
+                self.dhan_ids[symbol] = security_id
+                self.kotak_instruments[symbol] = instrument
+                self.opening_ranges[symbol] = opening_ranges[symbol]
+            return additions
+
     @property
     def errors(self):
         with self.lock:return list(self._errors.values())

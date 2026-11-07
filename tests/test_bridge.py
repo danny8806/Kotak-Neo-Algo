@@ -15,9 +15,9 @@ class BridgeTests(unittest.TestCase):
     def setUp(self):
         database_url, cleanup = create_test_database()
         self.addCleanup(cleanup)
-        now = datetime(2026, 11, 4, 9, 5, tzinfo=ZoneInfo("Asia/Kolkata"))
+        self.now = datetime(2026, 11, 4, 9, 5, tzinfo=ZoneInfo("Asia/Kolkata"))
         self.app = create_app(database_url=database_url,
-                              bearer_token="x" * 32, now_provider=lambda: now)
+                              bearer_token="x" * 32, now_provider=lambda: self.now)
         self.addCleanup(self.app.state.engine.dispose)
         self.client = TestClient(self.app)
         self.headers = {"Authorization": "Bearer " + "x" * 32,
@@ -107,6 +107,50 @@ class BridgeTests(unittest.TestCase):
                               headers={**headers, "Idempotency-Key": "universe-blocked"})
         self.assertEqual(blocked.status_code, 422)
         self.assertIn("outside the current official Nifty 500", blocked.text)
+
+    def test_incremental_batches_accumulate_and_keep_direction_immutable(self):
+        first = dict(self.report, status="READY")
+        first.pop("reason")
+        first["signals"] = [{
+            "symbol": "RELIANCE", "side": "LONG", "rank": 1,
+            "reason": "Company announced a material order win after the prior session.",
+            "news_summary": "The company filing reports a material contract with disclosed scope.",
+            "first_available_at": "2026-11-03T18:00:00+05:30",
+            "sources": [{"url": "https://nse.example/filing", "title": "Company filing",
+                         "published_at": "2026-11-03T18:00:00+05:30"}]
+        }]
+        first_headers = {**self.headers, "Idempotency-Key": "first-batch"}
+        self.assertEqual(self.client.post("/api/v1/signals/incoming", json=first,
+                                          headers=first_headers).status_code, 200)
+
+        self.now = datetime(2026, 11, 4, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        later = dict(first)
+        later.update(news_cutoff_at="2026-11-04T10:00:00+05:30",
+                     generated_at="2026-11-04T10:00:00+05:30")
+        later["signals"] = [{
+            "symbol": "TCS", "side": "SHORT", "rank": 1,
+            "reason": "Company disclosed a material adverse business development.",
+            "news_summary": "A verified exchange filing describes a newly reported issue.",
+            "first_available_at": "2026-11-04T09:30:00+05:30",
+            "sources": [{"url": "https://nse.example/filing-2", "title": "New company filing",
+                         "published_at": "2026-11-04T09:30:00+05:30"}]
+        }]
+        second_headers = {**self.headers, "Idempotency-Key": "second-batch"}
+        accepted = self.client.post("/api/v1/signals/incoming", json=later,
+                                    headers=second_headers)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        latest = self.client.get("/api/v1/signals/latest", headers=self.headers).json()["report"]
+        self.assertEqual([row["symbol"] for row in latest["signals"]], ["RELIANCE", "TCS"])
+        self.assertEqual([row["rank"] for row in latest["signals"]], [1, 1])
+        duplicate = self.client.post("/api/v1/signals/incoming", json=later,
+                                     headers=second_headers)
+        self.assertEqual(duplicate.json()["status"], "DUPLICATE")
+
+        flipped = dict(later)
+        flipped["signals"] = [dict(later["signals"][0], symbol="RELIANCE", side="SHORT")]
+        conflict = self.client.post("/api/v1/signals/incoming", json=flipped,
+                                    headers={**self.headers, "Idempotency-Key": "flipped-batch"})
+        self.assertEqual(conflict.status_code, 409)
 
 
 if __name__ == "__main__":

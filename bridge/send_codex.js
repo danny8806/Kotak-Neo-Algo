@@ -3,6 +3,7 @@
 // The bridge remains the authority for schema, date, universe, source, and deadline checks.
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const root = path.resolve(__dirname, "..");
 const envPath = path.join(root, ".env");
@@ -25,6 +26,14 @@ function readEnv(file) {
   return values;
 }
 
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  }
+  return value;
+}
+
 async function main() {
   if (!reportPath) fail("usage: node bridge/send_codex.js <report.json>");
   if (!fs.existsSync(envPath)) fail("project .env is missing");
@@ -45,8 +54,9 @@ async function main() {
   if (!report || typeof report !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(report.session_date || "")) {
     fail("report must include a valid session_date");
   }
-  const raw = Buffer.from(JSON.stringify(report), "utf8");
+  const raw = Buffer.from(JSON.stringify(canonicalize(report)), "utf8");
   if (raw.length > 256_000) fail("report exceeds the bridge size limit");
+  const digest = crypto.createHash("sha256").update(raw).digest("hex");
 
   let response;
   try {
@@ -56,7 +66,7 @@ async function main() {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "Authorization": `Bearer ${token}`,
-        "Idempotency-Key": `codex-${report.session_date}`,
+        "Idempotency-Key": `codex-${report.session_date}-${digest.slice(0, 24)}`,
       },
       body: raw,
       signal: AbortSignal.timeout(15_000),
@@ -69,7 +79,7 @@ async function main() {
   catch { fail(`bridge returned HTTP ${response.status} with an invalid response`); }
   if (!response.ok || !["ACCEPTED", "DUPLICATE"].includes(acknowledgement.status) ||
       acknowledgement.session_date !== report.session_date ||
-      !/^[a-f0-9]{64}$/.test(acknowledgement.sha256 || "")) {
+      acknowledgement.sha256 !== digest) {
     const detail = typeof acknowledgement.detail === "string" ? acknowledgement.detail : `HTTP ${response.status}`;
     fail(detail);
   }

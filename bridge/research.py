@@ -1,4 +1,4 @@
-"""Unattended pre-market research. Shadow output is the default."""
+"""Unattended NSE session research. Shadow output is the default."""
 from __future__ import annotations
 
 import argparse
@@ -298,8 +298,17 @@ def send_and_verify(client, payload, config):
         return get(client, endpoint, source=f"Bridge {name}",
                    headers={"Authorization": f"Bearer {token}"}).json()
     prior = read("status")
-    require(prior.get("session_date") == day and prior.get("received") is False,
-            "Bridge already has a report for this session, or its session status is unverified.")
+    prior_latest = read("latest")
+    require(prior.get("session_date") == day and prior_latest.get("session_date") == day,
+            "Bridge session status could not be verified.")
+    prior_report = prior_latest.get("report") or {}
+    expected_signals = {row["symbol"]: row["side"]
+                        for row in prior_report.get("signals", [])}
+    for row in payload.get("signals", []):
+        old_side = expected_signals.get(row["symbol"])
+        require(old_side in (None, row["side"]),
+                f"Signal direction changed during the session for {row['symbol']}.")
+        expected_signals[row["symbol"]] = row["side"]
     with tempfile.TemporaryDirectory(prefix="nifty-orb-") as directory:
         path = Path(directory) / "report.json"
         path.write_bytes(canonical_bytes(payload))
@@ -311,11 +320,14 @@ def send_and_verify(client, payload, config):
     require(ack.get("status") in ("ACCEPTED", "DUPLICATE") and ack.get("session_date") == day
             and ack.get("sha256") == digest, "Bridge acknowledgement mismatch.")
     status, latest = read("status"), read("latest")
+    latest_report = latest.get("report") or {}
+    actual_signals = {row["symbol"]: row["side"] for row in latest_report.get("signals", [])}
     require(status.get("received") is True and status.get("session_date") == day
-            and status.get("status") == payload["status"] and latest.get("current") is True
-            and latest.get("session_date") == day and latest.get("sha256") == digest
-            and hashlib.sha256(canonical_bytes(latest.get("report"))).hexdigest() == digest,
-            "Bridge read-back did not match the acknowledged report.")
+            and status.get("status") == latest_report.get("status") and latest.get("current") is True
+            and latest.get("session_date") == day
+            and all(actual_signals.get(symbol) == side for symbol, side in expected_signals.items())
+            and latest.get("sha256") == hashlib.sha256(canonical_bytes(latest_report)).hexdigest(),
+            "Bridge read-back did not contain the accepted session signals.")
     print(f"{ack['status']} and read-back verified: {day} {digest}")
 
 
@@ -334,9 +346,12 @@ def main():
     if not 0 < args.min_turnover_crore < float("inf"):
         parser.error("--min-turnover-crore must be positive and finite")
     now = datetime.now(IST)
-    cutoff = datetime.combine(now.date(), time(9), IST)
-    if now < cutoff:
+    cutoff = now
+    session_open = datetime.combine(now.date(), time(9), IST)
+    if now < session_open:
         parser.exit(2, "Research runs after 09:00 IST.\n")
+    if args.deliver and now.time() >= time(15):
+        parser.exit(2, "Signal delivery closes at 15:00 IST.\n")
     config = dotenv_values(ROOT / ".env", interpolate=False)
     key = os.getenv("OPENAI_API_KEY") or config.get("OPENAI_API_KEY")
     with httpx.Client(headers={"User-Agent": "Mozilla/5.0", "Referer": NSE + "/"},
@@ -356,9 +371,6 @@ def main():
             status = "READY" if signals else "NO_TRADE"
             if not signals:
                 reason = "No liquid candidates qualified on the verified filings."
-            if args.deliver and datetime.now(IST) >= cutoff + timedelta(minutes=13):
-                status, signals = "UNAVAILABLE", []
-                reason = "Research did not complete with enough time for the 09:14 intake deadline."
         except Unavailable as exc:
             status, signals, reason = "UNAVAILABLE", [], str(exc)
         except (ValueError, KeyError, IndexError, TypeError, AttributeError, OSError,

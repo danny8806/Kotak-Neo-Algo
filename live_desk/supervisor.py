@@ -197,9 +197,12 @@ class LiveSupervisor:
                 self.status="NO_ELIGIBLE_SIGNALS"
                 self.report=report
             return False
-        if self.report_sha and self.report_sha!=sha:
-            raise RuntimeError("Immutable session research report unexpectedly changed")
         with self.lock:
+            if self.report:
+                prior={row["symbol"]:row["side"] for row in self.report.get("signals",[])}
+                current={row["symbol"]:row["side"] for row in report.get("signals",[])}
+                if any(current.get(symbol)!=side for symbol,side in prior.items()):
+                    raise RuntimeError("Session signals were removed or changed direction")
             self.report=report
             self.report_sha=sha
             self.status="SIGNALS_VERIFIED"
@@ -249,14 +252,16 @@ class LiveSupervisor:
     def _map_instruments(self,now):
         wanted={item["symbol"] for item in self.report["signals"]}
         dhan_ids=dict(self.dhan_ids)
-        if set(dhan_ids)!=wanted:
-            dhan=self.master_fetch(wanted,now=now)
-            if dhan.session_date!=now.date().isoformat() or set(dhan.security_ids)!=wanted:
+        missing=wanted-set(dhan_ids)
+        if missing:
+            dhan=self.master_fetch(missing,now=now)
+            if dhan.session_date!=now.date().isoformat() or set(dhan.security_ids)!=missing:
                 raise RuntimeError("NSE EQ Dhan symbol master incomplete")
-            dhan_ids=dhan.security_ids
+            dhan_ids.update(dhan.security_ids)
         kotak=dict(self.kotak_ids)
-        if self.broker is not None and set(kotak)!=wanted:
-            kotak={s:lookup_kotak_equity(self.broker,s) for s in wanted}
+        if self.broker is not None:
+            for symbol in sorted(wanted-set(kotak)):
+                kotak[symbol]=lookup_kotak_equity(self.broker,symbol)
         with self.lock:
             self.dhan_ids=dhan_ids
             self.kotak_ids=kotak
@@ -265,7 +270,9 @@ class LiveSupervisor:
         now=self.now()
         if now.weekday()>=5 or now.time()<START:
             return
-        if self.runtime:return
+        if self.runtime:
+            self._extend_runtime()
+            return
         if self.ticker:
             if self.broker is None:
                 return
@@ -302,6 +309,34 @@ class LiveSupervisor:
             self.orb_events={}
             self.status="MONITORING_LIVE" if runtime else "MONITORING_DHAN_ORB_KOTAK_PENDING"
         ticker.start()
+
+    def _extend_runtime(self):
+        """Map and monitor newly delivered candidates without restarting the feed."""
+        if not self.runtime or not self.dhan or not self.dhan.token:
+            return
+        known=set(self.runtime.signals)
+        candidates=[row for row in self.report["signals"] if row["symbol"] not in known]
+        if not candidates:
+            return
+        if self.broker is None:
+            self.status="MONITORING_DHAN_ORB_KOTAK_PENDING"
+            return
+        self._map_instruments(self.now())
+        opening={}
+        for row in candidates:
+            symbol=row["symbol"]
+            opening[symbol]=opening_range(self.dhan,self.dhan_ids[symbol],self.now().date(),
+                                           timestamp_mode=self.policy.timestamp_mode)
+        added=self.runtime.extend_signals(
+            signals=candidates,
+            dhan_ids={row["symbol"]:self.dhan_ids[row["symbol"]] for row in candidates},
+            kotak_instruments={row["symbol"]:self.kotak_ids[row["symbol"]] for row in candidates},
+            opening_ranges=opening)
+        self.opening_ranges.update(opening)
+        if added and self.ticker:
+            if not hasattr(self.ticker,"add_symbols"):
+                raise RuntimeError("The active Dhan ticker cannot subscribe new symbols")
+            self.ticker.add_symbols({symbol:self.dhan_ids[symbol] for symbol in added})
 
     def _broker_cash(self):
         response=self.broker.limits()  # kotakneoapi v3: all segments, no arguments

@@ -67,9 +67,11 @@ def validate(data, *, allow_sample=False, expected_date=None, allowed_symbols=No
         require(session_date == expected_date, 'Source report date differs from publishing session')
     cutoff = aware_time(data['news_cutoff_at'], 'news_cutoff_at')
     generated = aware_time(data['generated_at'], 'generated_at')
-    require(cutoff == datetime.combine(day, time(9, 0), IST),
-            'News cutoff must be 09:00 IST on the session date')
-    require(generated >= cutoff, 'Report must be generated at or after its declared cutoff')
+    session_open = datetime.combine(day, time(9, 0), IST)
+    require(cutoff.date() == day and cutoff >= session_open,
+            'News cutoff must be on the session date and at or after 09:00 IST')
+    require(generated.date() == day and generated >= cutoff,
+            'Report must be generated on the session date at or after its declared cutoff')
     require(generated <= datetime.now(IST) + timedelta(minutes=5),
             'Report generated_at is in the future')
     require(data['status'] == 'READY' or not data['signals'],
@@ -105,7 +107,7 @@ def validate(data, *, allow_sample=False, expected_date=None, allowed_symbols=No
             require(isinstance(signal[key], str) and len(signal[key].strip()) >= 15,
                     f'{symbol}.{key} must explain the event')
         require(aware_time(signal['first_available_at'], f'{symbol}.first_available_at') <= cutoff,
-                f'{symbol}: event was not available by 09:00 IST')
+                f'{symbol}: event was not available by the declared cutoff')
         if 'confidence' in signal:
             score = signal['confidence']
             require(score is None or (type(score) in (int, float) and 0 <= score <= 1),

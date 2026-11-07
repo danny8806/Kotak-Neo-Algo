@@ -4,13 +4,13 @@ The live app receives the daily research report, maps its symbols to Dhan NSE EQ
 
 ## One direct daily path
 
-1. The Codex schedule runs at 09:02 IST on weekdays and prepares up to five LONG and five SHORT candidates with source evidence.
-2. `node bridge/send_codex.js <report.json>` reads the bridge URL and token from the ignored local `.env` and posts the report to `https://deltacapitals.systems/api/v1/signals/incoming` over HTTPS.
+1. The Codex schedule follows its existing weekday schedule. Each run prepares only new LONG/SHORT candidates with source evidence, up to five per side for the session; the bridge accepts additional batches during the session.
+2. `node bridge/send_codex.js <report.json>` reads the bridge URL and token from the ignored local `.env` and posts each batch to `https://deltacapitals.systems/api/v1/signals/incoming` over HTTPS.
 
 Signal intake is restricted to the official Nifty 500 constituent snapshot in `nifty500_universe.json`; the live dashboard refuses out-of-universe candidates. Refresh this checked snapshot before each release with `python scripts/refresh_nifty500_universe.py`. The 45-day freshness limit fails closed if it is neglected.
 
-3. The bridge validates the date, cutoff, sources and JSON contract, stores the report and returns `ACCEPTED` or `DUPLICATE`. The task checks the status and hash. No verified receipt means no entry signals.
-4. The supervisor resolves current NSE cash-equity mappings, reads the 09:15 Dhan candle and listens for fresh Dhan ticks.
+3. The bridge validates the date, cutoff, sources and JSON contract, appends only new symbols to the session report and returns `ACCEPTED` or `DUPLICATE`. The task checks the status and hash. No verified receipt means no entry signals.
+4. The supervisor resolves each new NSE cash-equity mapping, reads its 09:15 Dhan candle and subscribes it on the existing live ticker feed.
 5. LONG qualifies on a direct cross above the candle high; SHORT qualifies on a direct cross below its low. The system submits whole-share MIS `MKT` requests and reconciles fills from Kotak's reports. Kotak's current guidance describes conversion of API market requests into protected limit orders; submission does not guarantee a fill. Configured square-off is 15:15 IST.
 
 The operational trading snapshot keeps standard NSE `EQ` series with Indian `INE` equity ISINs. REIT units, trade-to-trade series and placeholder rows remain visible in the full constituent audit but are excluded from eligible trading symbols.
@@ -29,11 +29,11 @@ Open `http://127.0.0.1:8010`. Docker Compose is `live_desk/compose.yaml`; it sta
 
 ## Codex scheduler
 
-Use [the Codex task prompt](../bridge/CODEX_TASK_PROMPT.md). The sender reads `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` from the ignored local `.env`; no OpenAI API key or separate HTTP action is needed. Keep the token out of prompts and reports.
+Use [the Codex task prompt](../bridge/CODEX_TASK_PROMPT.md) with the existing project schedule. The sender reads `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` from the ignored local `.env`; no OpenAI API key or separate HTTP action is needed. Keep the token out of prompts and reports.
 
 ## Trading configuration
 
-Private environment credentials are required for Kotak Neo and read-only Dhan market data. `live_desk/policy.json` sets defaults: the 09:15 opening candle, 10:00 entry cutoff, 15:15 exit, up to five positions per side, ₹1 lakh per position and ₹10 lakh gross cap. The authenticated dashboard lets an operator customize per-stock allocation, maximum total/long/short positions (up to 10 total), gross cap, entry cutoff and exit time while disarmed. These settings persist in the PostgreSQL live ledger, survive restarts and are locked while armed. PostgreSQL transaction advisory locks serialize daily cap reservations across workers. The signal contract supports at most five LONG and five SHORT Nifty 500 candidates; actual entries remain limited by the configured per-side, total-position and gross caps.
+Private environment credentials are required for Kotak Neo and read-only Dhan market data. `live_desk/policy.json` sets defaults: the 09:15 opening candle, 15:00 entry cutoff, 15:15 exit, up to five positions per side, ₹1 lakh per position and ₹10 lakh gross cap. The authenticated dashboard lets an operator customize per-stock allocation, maximum total/long/short positions (up to 10 total), gross cap, entry cutoff and exit time while disarmed. These settings persist in the PostgreSQL live ledger, survive restarts and are locked while armed. PostgreSQL transaction advisory locks serialize daily cap reservations across workers. The signal contract supports at most five LONG and five SHORT Nifty 500 candidates; actual entries remain limited by the configured per-side, total-position and gross caps.
 
 The policy sets `dhan_candle_timestamp_mode` to `end`, verified against the returned Dhan 09:15 one-minute candle timestamps on 2026-11-05. Recheck this setting if Dhan changes its chart timestamp convention. Dhan access tokens are generated on startup and refreshed daily before expiry by the Dhan token supervisor. India VIX is fetched read-only from the configured Dhan `IDX_I` security ID and shown as context; it never triggers an entry. Compose defaults `LIVE_ORDERS_ALLOWED` to `NO`; the service starts disarmed after every restart. Dashboard arming also requires operator TOTP, exact acknowledgment, fresh feeds and broker checks.
 
