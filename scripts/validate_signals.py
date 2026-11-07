@@ -70,10 +70,12 @@ def validate(data, *, allow_sample=False, expected_date=None, allowed_symbols=No
     session_open = datetime.combine(day, time(9, 0), IST)
     require(cutoff.date() == day and cutoff >= session_open,
             'News cutoff must be on the session date and at or after 09:00 IST')
-    require(generated.date() == day and generated >= cutoff,
+    require(generated >= cutoff,
             'Report must be generated on the session date at or after its declared cutoff')
     require(generated <= datetime.now(IST) + timedelta(minutes=5),
             'Report generated_at is in the future')
+    require(generated.date() == day,
+            'Report must be generated on the session date')
     require(data['status'] == 'READY' or not data['signals'],
             'NO_TRADE and UNAVAILABLE reports may not contain candidates')
     require(data['status'] != 'READY' or len(data['signals']) > 0,
