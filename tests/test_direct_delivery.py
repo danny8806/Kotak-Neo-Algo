@@ -7,7 +7,7 @@ import copy
 import json
 import unittest
 from datetime import datetime
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient

@@ -22,7 +22,7 @@ The repository's `bridge.send` is a command-line sender for an authorized proces
 
 ## Codex scheduled task
 
-For a local Codex scheduler, use [the Codex task prompt](CODEX_TASK_PROMPT.md) with the existing project schedule. `node bridge/send_codex.js <report.json>` sends each generated v1.0 batch to `SIGNAL_BRIDGE_URL` using `SIGNAL_BRIDGE_TOKEN` from the ignored project `.env`; no OpenAI API key is required. The dashboard bridge validates the report and adds newly qualified symbols to today's session list. The scheduler must report delivery only after an `ACCEPTED` or `DUPLICATE` acknowledgment.
+For a local Codex scheduler, use [the Codex task prompt](CODEX_TASK_PROMPT.md) with the existing project schedule. `node bridge/send_codex.js <report.json>` sends each generated v1.0 batch to `SIGNAL_BRIDGE_URL` using `SIGNAL_BRIDGE_TOKEN` from the ignored project `.env`; no OpenAI API key is required. The sender retries transient network errors and HTTP 408/425/429/5xx responses up to three times with the same idempotency key, and reports a bounded error if delivery still fails. Permanent client errors fail immediately. The dashboard bridge validates the report and adds newly qualified symbols to today's session list. The scheduler must report delivery only after an `ACCEPTED` or `DUPLICATE` acknowledgment.
 
 ## Unattended Astra research job
 
