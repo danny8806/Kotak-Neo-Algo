@@ -159,6 +159,50 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertIsNone(self.supervisor.runtime)
         self.assertEqual(self.broker.order_calls,0)
 
+    def test_weekend_signal_is_mapped_without_starting_market_runtime(self):
+        from live_desk.dhan_instruments import DhanMasterSnapshot
+
+        now=datetime(2026,11,7,10,0,tzinfo=IST)
+        report={"schema_version":"1.0","status":"READY","market":"NSE",
+            "timezone":"Asia/Kolkata","session_date":"2026-11-07",
+            "news_cutoff_at":"2026-11-07T09:00:00+05:30",
+            "generated_at":"2026-11-07T10:00:00+05:30","execution_enabled":False,
+            "signals":[{"symbol":"TESTA","side":"LONG","rank":1,
+                "reason":"Verified company event supports positive directional bias.",
+                "news_summary":"A verified company filing provides a positive catalyst.",
+                "first_available_at":"2026-11-06T16:00:00+05:30",
+                "sources":[{"url":"https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+                    "title":"Issuer filing","published_at":"2026-11-06T16:00:00+05:30"}]}]}
+        raw=json.dumps(report,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+        with self.bridge.state.engine.begin() as db:
+            db.execute(reports.insert().values(session_date="2026-11-07",
+                idempotency_key="off-session-dhan-map-test",
+                sha256=hashlib.sha256(raw.encode()).hexdigest(),status="READY",
+                received_at=now,original_json=raw))
+
+        class Dhan:
+            token="test-authenticated-token"
+
+        class Auth:
+            def snapshot(self):return {"state":"AUTHENTICATED"}
+            def stop(self):pass
+
+        master=lambda symbols,at:DhanMasterSnapshot(at.date().isoformat(),at,"master-sha",
+            {symbol:"12345" for symbol in symbols})
+        desk=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=lambda:now,
+            kotak_factory=lambda:None,master_fetch=master)
+        self.addCleanup(desk.stop)
+        desk.dhan=Dhan();desk.dhan_auth=Auth()
+        desk.cycle()
+
+        self.assertEqual(desk.status,"SIGNALS_MAPPED_OFF_SESSION")
+        self.assertEqual(desk.dhan_ids,{"TESTA":"12345"})
+        self.assertEqual(desk.kotak_ids,{})
+        self.assertIsNone(desk.runtime)
+        self.assertIsNone(desk.ticker)
+        self.assertFalse(desk.armed)
+        self.assertEqual(self.broker.order_calls,0)
+
     def test_missing_kotak_configuration_is_quiet_and_disarmed(self):
         keys=("KOTAK_NEO_CONSUMER_KEY","KOTAK_NEO_MOBILE_NUMBER","KOTAK_NEO_UCC",
               "KOTAK_NEO_MPIN","KOTAK_NEO_TOTP_SECRET")

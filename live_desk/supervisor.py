@@ -616,7 +616,26 @@ class LiveSupervisor:
                 self.status="NEEDS_KOTAK_CREDENTIALS"
         elif self.broker is None:
             self.broker=self.kotak_factory()
-        if now.weekday()>=5:return
+        # Weekend/off-session signals may still be delivered and mapped so the
+        # dashboard can verify the production intake path. Keep all market data,
+        # ORB, and order handling behind the regular market-session gates below.
+        if now.weekday()>=5:
+            self.blocked_stage="CURRENT_SESSION_SIGNALS"
+            has_report=self._load_report()
+            if not has_report:
+                return
+            if not self.dhan or not getattr(self.dhan,"token",""):
+                self.status="DHAN_AUTHENTICATING" if self.dhan else "NEEDS_DHAN_CREDENTIALS"
+                self.blocked_stage="DHAN_AUTHENTICATION"
+                return
+            self.blocked_stage="INSTRUMENT_MAPPING"
+            self._map_instruments(now)
+            with self.lock:
+                self.status="SIGNALS_MAPPED_OFF_SESSION"
+                self.blocked_stage=None
+                self.armed=False
+                if self.runtime:self.runtime.enabled=False
+            return
         self._refresh_vix_context(now)
         if self.ticker and hasattr(self.ticker,"refresh_authentication"):
             if self.ticker.refresh_authentication() and self.armed:
