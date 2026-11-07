@@ -6,7 +6,7 @@ Configure this prompt on the ChatGPT scheduled task. Connect an authorized HTTPS
 >
 > Produce one complete JSON object matching `schema/stock-signals.schema.json` version 1.0. Set today's IST `session_date`, today's 09:00:00+05:30 `news_cutoff_at`, actual `generated_at`, `market` to `NSE`, `timezone` to `Asia/Kolkata`, and `execution_enabled` to `false`. Each candidate needs `symbol`, `side`, `rank`, `reason`, `news_summary`, `first_available_at`, at least one HTTPS source with `url`, `title`, and `published_at`, and `confidence` only if defensible. All events and sources must be available by the cutoff. If nothing is sufficiently supported, use `NO_TRADE` or `UNAVAILABLE`, an empty `signals` list, and a clear `reason`.
 >
-> Send the entire JSON object directly to the connected dashboard action for `POST https://<configured-dashboard-host>/api/v1/signals/incoming`. Include `Content-Type: application/json`, `Authorization: Bearer` using the connected action's stored secret, and a stable `Idempotency-Key` for this session. Do not use GitHub, a repository file, or an intermediary publisher to deliver the report.
+> Send the entire JSON object directly to the connected dashboard action for `POST https://deltacapitals.systems/api/v1/signals/incoming`. Include `Content-Type: application/json`, `Authorization: Bearer` using the connected action's stored secret, and a stable `Idempotency-Key` for this session. Do not use GitHub, a repository file, or an intermediary publisher to deliver the report.
 >
 > Confirm delivery only if the bridge returns HTTP success and JSON status `ACCEPTED` or `DUPLICATE` with today's `session_date` and the same `sha256` as the canonical JSON body. Report the acknowledgment and hash. If the connected action is unavailable, the request fails, or the acknowledgment does not match, say `NOT DELIVERED` and give the reason. Producing the JSON or completing the scheduled run alone is not delivery. Never place orders or include credentials in the report.
 
@@ -21,4 +21,4 @@ Configure this prompt on the ChatGPT scheduled task. Connect an authorized HTTPS
 
 ## Setup needed outside this repository
 
-The dashboard host needs public HTTPS, DNS/TLS routing to the live app, and a private `SIGNAL_BRIDGE_TOKEN`. The ChatGPT account needs a connected app/action that can make authenticated HTTPS POST requests and securely store the matching secret. The app already exposes the receiver; this repository cannot grant ChatGPT account permissions or create its connected-app secret.
+The dashboard host is `https://deltacapitals.systems`; Nginx routes `/api/v1/` over HTTPS to the live app on loopback port 8010. The ChatGPT account needs a connected app/action that can make authenticated HTTPS POST requests and securely store the matching `SIGNAL_BRIDGE_TOKEN`. The app already exposes the receiver; this repository cannot grant ChatGPT account permissions or create its connected-app secret.
