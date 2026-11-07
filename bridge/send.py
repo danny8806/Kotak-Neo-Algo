@@ -48,10 +48,6 @@ def deliver(payload: dict, *, url: str, token: str, timeout: float = 12.0,
         raise DeliveryError("Bootstrap reports are not valid delivery payloads")
     if payload.get("sample") is True:
         raise DeliveryError("Sample reports are not allowed")
-    if now.hour < 9:
-        raise DeliveryError("Reports cannot be delivered before 09:00 IST")
-    if payload["status"] == "READY" and now.time() >= datetime.strptime("15:00", "%H:%M").time():
-        raise DeliveryError("READY delivery deadline passed (15:00 IST)")
     if not isinstance(token, str) or len(token) < 32:
         raise DeliveryError("A 32+ character SIGNAL_BRIDGE_TOKEN is required")
 

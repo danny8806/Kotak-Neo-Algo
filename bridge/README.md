@@ -9,7 +9,7 @@ The live dashboard already embeds this authenticated API receiver. ChatGPT sends
 - `GET /api/v1/signals/status`: current-session delivery status, Bearer token required.
 - `GET /api/v1/health`: liveness only; no signal data.
 
-The receiver validates the signal schema, report date, source timestamps, duplicate JSON keys, universe, and duplicate/conflicting submissions. It stores each accepted input batch and maintains one additive session report. New symbols can be delivered during the NSE session until 15:00 IST; a symbol cannot be repeated with a different direction, and the session report is capped at five LONG and five SHORT symbols. Identical retries return `DUPLICATE`; conflicting batches return HTTP 409.
+The receiver validates the signal schema, report date, source timestamps, duplicate JSON keys, universe, and duplicate/conflicting submissions. It stores each accepted input batch and maintains one additive daily report. Reports can be delivered at any time; outside the market entry window, the terminal maps symbols but does not start ORB monitoring. A symbol cannot be repeated with a different direction, and the daily report is capped at five LONG and five SHORT symbols. Identical retries return `DUPLICATE`; conflicting batches return HTTP 409.
 
 ## Configure the direct connection
 

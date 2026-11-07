@@ -268,7 +268,10 @@ class LiveSupervisor:
 
     def _build_runtime(self):
         now=self.now()
-        if now.weekday()>=5 or now.time()<START:
+        # Outside the entry window, map new signals but do not start ORB/feed.
+        # An existing runtime stays alive for its EOD position management.
+        if (now.weekday()>=5 or now.time()<START or
+                now.time()>=self.policy.entry_cutoff):
             return
         if self.runtime:
             self._extend_runtime()
@@ -469,7 +472,7 @@ class LiveSupervisor:
     def _observe_orb_crossing(self,symbol,price,tick_at,now):
         local=tick_at.astimezone(IST)
         if (local.date().isoformat()!=self.session_date or local.time()<time(9,16) or
-            local.time()>self.policy.entry_cutoff or symbol not in self.opening_ranges):
+            local.time()>=self.policy.entry_cutoff or symbol not in self.opening_ranges):
             return
         with self.lock:
             previous_at=self._orb_last_tick.get(symbol)
@@ -616,9 +619,8 @@ class LiveSupervisor:
                 self.status="NEEDS_KOTAK_CREDENTIALS"
         elif self.broker is None:
             self.broker=self.kotak_factory()
-        # Weekend/off-session signals may still be delivered and mapped so the
-        # dashboard can verify the production intake path. Keep all market data,
-        # ORB, and order handling behind the regular market-session gates below.
+        # Off-session signals may arrive at any time and are mapped for the
+        # dashboard. No ORB/feed starts outside the entry window.
         if now.weekday()>=5:
             self.blocked_stage="CURRENT_SESSION_SIGNALS"
             has_report=self._load_report()
@@ -654,8 +656,15 @@ class LiveSupervisor:
                 self.blocked_stage="OPENING_RANGE_AND_FEED"
                 self._build_runtime()
                 self.poll_ohlc()
-                self.blocked_stage=("KOTAK_AUTHENTICATION" if not self.broker else
-                                    "OPENING_RANGE_AND_FEED" if not self.runtime else None)
+                out_of_window=(now.time()<START or now.time()>=self.policy.entry_cutoff)
+                if not self.runtime and out_of_window:
+                    with self.lock:
+                        self.status="SIGNALS_MAPPED_OFF_SESSION"
+                        self.blocked_stage=None
+                        self.armed=False
+                else:
+                    self.blocked_stage=("KOTAK_AUTHENTICATION" if not self.broker else
+                                        "OPENING_RANGE_AND_FEED" if not self.runtime else None)
             elif self.dhan is None:
                 self.status="NEEDS_DHAN_CREDENTIALS"
         else:

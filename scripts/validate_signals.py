@@ -3,7 +3,7 @@
 import argparse
 import json
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -67,9 +67,8 @@ def validate(data, *, allow_sample=False, expected_date=None, allowed_symbols=No
         require(session_date == expected_date, 'Source report date differs from publishing session')
     cutoff = aware_time(data['news_cutoff_at'], 'news_cutoff_at')
     generated = aware_time(data['generated_at'], 'generated_at')
-    session_open = datetime.combine(day, time(9, 0), IST)
-    require(cutoff.date() == day and cutoff >= session_open,
-            'News cutoff must be on the session date and at or after 09:00 IST')
+    require(cutoff.date() == day,
+            'News cutoff must be on the session date')
     require(generated >= cutoff,
             'Report must be generated on the session date at or after its declared cutoff')
     require(generated <= datetime.now(IST) + timedelta(minutes=5),

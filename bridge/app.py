@@ -7,7 +7,7 @@ import hmac
 import json
 import os
 import sys
-from datetime import datetime, time
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -89,10 +89,6 @@ def create_app(*, database_url: str | None = None, bearer_token: str | None = No
                      allowed_symbols=allowed_symbols)
             if payload["session_date"] is None:
                 raise ValueError("Bootstrap unavailable report is not a session delivery")
-            if current.time() < time(9, 0):
-                raise ValueError("Report arrived before the 09:00 session start")
-            if payload["status"] == "READY" and current.time() >= time(15, 0):
-                raise ValueError("READY report arrived after the 15:00 entry cutoff")
         except (ValueError, TypeError, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
