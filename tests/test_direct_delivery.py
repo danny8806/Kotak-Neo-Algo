@@ -122,7 +122,7 @@ class DirectDeliveryTests(unittest.TestCase):
             self.sender(payload=stale)
         self.assertEqual(self.calls, 0)
 
-    def test_ready_after_deadline_blocked(self):
+    def test_ready_after_opening_intake_is_accepted_before_entry_cutoff(self):
         ready = no_trade_report()
         ready["status"] = "READY"
         ready["signals"] = [{
@@ -135,6 +135,23 @@ class DirectDeliveryTests(unittest.TestCase):
                          "published_at": "2026-11-04T08:00:00+05:30"}]
         }]
         late = NOW.replace(hour=9, minute=15)
+        result = self.sender(payload=ready, now=late)
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(self.calls, 1)
+
+    def test_ready_at_or_after_entry_cutoff_is_blocked(self):
+        ready = no_trade_report()
+        ready["status"] = "READY"
+        ready["signals"] = [{
+            "symbol": "TESTA", "side": "LONG", "rank": 1,
+            "reason": "Synthetic event, for direct delivery tests only.",
+            "news_summary": "Synthetic report, not real financial news.",
+            "first_available_at": "2026-11-04T08:00:00+05:30",
+            "sources": [{"url": "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+                         "title": "Test URL; no actual stock event",
+                         "published_at": "2026-11-04T08:00:00+05:30"}]
+        }]
+        late = NOW.replace(hour=15, minute=0)
         with self.assertRaises(DeliveryError):
             self.sender(payload=ready, now=late)
         self.assertEqual(self.calls, 0)

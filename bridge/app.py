@@ -12,7 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text, create_engine, select
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text, create_engine, select, update
 from sqlalchemy.exc import IntegrityError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -27,6 +27,15 @@ reports = Table(
     Column("idempotency_key", String(128), nullable=False, unique=True),
     Column("sha256", String(64), nullable=False),
     Column("status", String(16), nullable=False),
+    Column("received_at", DateTime(timezone=True), nullable=False),
+    Column("original_json", Text, nullable=False),
+)
+signal_batches = Table(
+    "signal_batches", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("session_date", String(10), nullable=False),
+    Column("idempotency_key", String(128), nullable=False, unique=True),
+    Column("sha256", String(64), nullable=False),
     Column("received_at", DateTime(timezone=True), nullable=False),
     Column("original_json", Text, nullable=False),
 )
@@ -81,30 +90,80 @@ def create_app(*, database_url: str | None = None, bearer_token: str | None = No
             if payload["session_date"] is None:
                 raise ValueError("Bootstrap unavailable report is not a session delivery")
             if current.time() < time(9, 0):
-                raise ValueError("Report arrived before the 09:00 research cutoff")
-            if payload["status"] == "READY" and current.time() >= time(9, 14):
-                raise ValueError("READY report arrived after the 09:14 ORB intake deadline")
+                raise ValueError("Report arrived before the 09:00 session start")
+            if payload["status"] == "READY" and current.time() >= time(15, 0):
+                raise ValueError("READY report arrived after the 15:00 entry cutoff")
         except (ValueError, TypeError, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         digest = hashlib.sha256(raw.encode()).hexdigest()
         with engine.begin() as connection:
-            existing = connection.execute(select(reports).where(
-                (reports.c.session_date == payload["session_date"]) |
-                (reports.c.idempotency_key == idempotency_key))).mappings().first()
-            if existing:
-                if (existing["session_date"] == payload["session_date"] and
-                    existing["idempotency_key"] == idempotency_key and existing["sha256"] == digest):
+            existing_batch = connection.execute(select(signal_batches).where(
+                signal_batches.c.idempotency_key == idempotency_key)).mappings().first()
+            if existing_batch:
+                if existing_batch["session_date"] == payload["session_date"] and existing_batch["sha256"] == digest:
                     return {"status": "DUPLICATE", "session_date": payload["session_date"],
                             "sha256": digest}
-                raise HTTPException(status_code=409, detail="Conflicting report or idempotency key")
+                raise HTTPException(status_code=409, detail="Conflicting idempotency key")
+            existing_report = connection.execute(select(reports).where(
+                reports.c.session_date == payload["session_date"])).mappings().first()
+            aggregate = payload
+            if existing_report:
+                previous = json.loads(existing_report["original_json"])
+                old_signals = previous.get("signals", []) if previous.get("status") == "READY" else []
+                new_signals = payload.get("signals", []) if payload["status"] == "READY" else []
+                if previous.get("status") == "READY" and payload["status"] != "READY":
+                    raise HTTPException(status_code=409, detail="A later non-ready batch cannot replace session signals")
+                if previous.get("status") != "READY" and payload["status"] != "READY":
+                    raise HTTPException(status_code=409, detail="Conflicting non-ready report for this session")
+                old_cutoff = datetime.fromisoformat(previous["news_cutoff_at"].replace("Z", "+00:00"))
+                new_cutoff = datetime.fromisoformat(payload["news_cutoff_at"].replace("Z", "+00:00"))
+                if old_signals and new_signals and new_cutoff < old_cutoff:
+                    raise HTTPException(status_code=409, detail="Signal batch cutoff cannot move backwards")
+                known = {item["symbol"]: item for item in old_signals}
+                additions = []
+                for item in new_signals:
+                    old = known.get(item["symbol"])
+                    if old is None:
+                        additions.append(item)
+                    elif old["side"] != item["side"]:
+                        raise HTTPException(status_code=409, detail=f"Conflicting direction for {item['symbol']}")
+                if not additions and old_signals:
+                    return {"status": "DUPLICATE", "session_date": payload["session_date"],
+                            "sha256": digest}
+                combined = list(old_signals) + additions
+                counts = {side: sum(item["side"] == side for item in combined)
+                          for side in ("LONG", "SHORT")}
+                if len(combined) > 10 or any(count > 5 for count in counts.values()):
+                    raise HTTPException(status_code=422, detail="Session limit is five LONG and five SHORT symbols")
+                if combined:
+                    for side in ("LONG", "SHORT"):
+                        ordered = [item for item in combined if item["side"] == side]
+                        for rank, item in enumerate(ordered, 1):
+                            item["rank"] = rank
+                    aggregate = dict(payload)
+                    aggregate["status"] = "READY"
+                    aggregate.pop("reason", None)
+                    aggregate["signals"] = combined
+                raw = json.dumps(aggregate, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
             try:
-                connection.execute(reports.insert().values(
+                connection.execute(signal_batches.insert().values(
                     session_date=payload["session_date"], idempotency_key=idempotency_key,
-                    sha256=digest, status=payload["status"], received_at=current,
-                    original_json=raw))
+                    sha256=digest, received_at=current,
+                    original_json=json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)))
+                aggregate_sha = hashlib.sha256(raw.encode()).hexdigest()
+                if existing_report:
+                    connection.execute(update(reports).where(
+                        reports.c.session_date == payload["session_date"]).values(
+                            idempotency_key=idempotency_key, sha256=aggregate_sha,
+                            status=aggregate["status"], received_at=current, original_json=raw))
+                else:
+                    connection.execute(reports.insert().values(
+                        session_date=payload["session_date"], idempotency_key=idempotency_key,
+                        sha256=aggregate_sha, status=aggregate["status"], received_at=current,
+                        original_json=raw))
             except IntegrityError as exc:
-                raise HTTPException(status_code=409, detail="Concurrent duplicate report") from exc
+                raise HTTPException(status_code=409, detail="Concurrent duplicate signal batch") from exc
         return {"status": "ACCEPTED", "session_date": payload["session_date"],
                 "sha256": digest}
 

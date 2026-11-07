@@ -1,0 +1,6 @@
+{
+  "name": "kotak-live-dashboard-checks",
+  "private": true,
+  "scripts": {"test:dashboard": "node tests/test_dashboard_ui.cjs"},
+  "devDependencies": {"playwright": "1.62.1"}
+}

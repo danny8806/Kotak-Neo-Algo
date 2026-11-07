@@ -8,3 +8,9 @@ __pycache__/
 .pytest_cache/
 .venv/
 logs/
+node_modules/
+
+# Local production verification artifacts
+reports/live-dashboard-*.png
+reports/dashboard-workspace-live-*.png
+reports/production-components-*.json

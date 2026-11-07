@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - 'ops/**'
-      - 'tests/test_vps_bootstrap.py'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
       - 'live_desk/**'
       - 'bridge/**'
       - 'scripts/validate_signals.py'
@@ -63,6 +65,15 @@ jobs:
           bash -n ops/deploy_live_vps.sh
           bash -n ops/activate_live_vps.sh
           bash -n ops/retire_old_dashboard.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify live dashboard components on desktop and mobile
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+          npm run test:dashboard
       - name: Deploy separate live-only service over pinned SSH (starts disarmed)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}

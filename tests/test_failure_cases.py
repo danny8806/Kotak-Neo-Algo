@@ -93,9 +93,18 @@ class ValidatorFailureCases(unittest.TestCase):
 
     def test_reject_bad_date_cutoff_and_naive_timestamps(self):
         self.assert_rejected(lambda p: p.update(session_date="2026-02-30"), "Invalid session")
-        self.assert_rejected(lambda p: p.update(news_cutoff_at="2026-11-03T09:01:00+05:30"), "09:00")
+        self.assert_rejected(lambda p: p.update(news_cutoff_at="2026-11-03T08:59:00+05:30"), "09:00")
+        self.assert_rejected(lambda p: p.update(news_cutoff_at="2026-11-02T15:00:00+05:30"), "session date")
         for field in ("news_cutoff_at", "generated_at"):
             self.assert_rejected(lambda p: p.update({field: "2026-11-03T09:00:00"}), "timezone")
+
+    def test_intraday_cutoff_accepts_new_session_evidence(self):
+        payload = copy.deepcopy(self.good)
+        payload["news_cutoff_at"] = "2026-11-03T10:00:00+05:30"
+        payload["generated_at"] = "2026-11-03T10:01:00+05:30"
+        payload["signals"][0]["first_available_at"] = "2026-11-03T09:30:00+05:30"
+        payload["signals"][0]["sources"][0]["published_at"] = "2026-11-03T09:30:00+05:30"
+        validate(payload)
 
     def test_reject_generated_before_cutoff_or_in_future(self):
         self.assert_rejected(lambda p: p.update(generated_at="2026-11-03T08:59:00+05:30"), "at or after")

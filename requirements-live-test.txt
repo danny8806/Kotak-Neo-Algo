@@ -1,3 +1,4 @@
 -r requirements-bridge.txt
 requests>=2.31,<3
 websocket-client>=1.7,<2
+kotakneoapi==3.0.13
