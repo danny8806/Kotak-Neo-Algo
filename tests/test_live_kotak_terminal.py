@@ -187,7 +187,7 @@ class LiveTerminalTests(unittest.TestCase):
             def snapshot(self):return {"state":"AUTHENTICATED"}
             def stop(self):pass
 
-        master=lambda symbols,at:DhanMasterSnapshot(at.date().isoformat(),at,"master-sha",
+        master=lambda symbols,now:DhanMasterSnapshot(now.date().isoformat(),now,"master-sha",
             {symbol:"12345" for symbol in symbols})
         desk=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=lambda:now,
             kotak_factory=lambda:None,master_fetch=master)
