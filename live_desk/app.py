@@ -8,7 +8,7 @@ import asyncio, hashlib, hmac, os
 from datetime import datetime
 from pathlib import Path
 from fastapi import HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from bridge.app import create_app as bridge_app
 from live_desk.dhan_data import IST, totp_now
@@ -36,6 +36,19 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
                                        allowed_symbols=allowed_symbols)
     app.state.live=desk
     app.title="LIVE Kotak Neo · News Signal Trading Terminal"
+    base_path=os.getenv("DASHBOARD_BASE_PATH","").strip().rstrip("/")
+    if base_path and (not base_path.startswith("/") or base_path.startswith("//") or
+                      any(part in base_path for part in ("?", "#", "\\"))):
+        raise RuntimeError("DASHBOARD_BASE_PATH must be an absolute URL path")
+
+    def page(filename):
+        markup=(ROOT/"static"/filename).read_text(encoding="utf-8")
+        markup=markup.replace("__DASHBOARD_BASE_PATH__",base_path)
+        return HTMLResponse(markup)
+
+    def public_path(path):
+        return f"{base_path}{path}" if base_path else path
+
     app.mount("/static",StaticFiles(directory=ROOT/"static"),name="static")
 
     def expected_cookie():
@@ -85,8 +98,8 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
     @app.get("/login")
     def login_page(request:Request):
         if logged_in(request.cookies.get(COOKIE)):
-            return RedirectResponse("/",status_code=303)
-        return FileResponse(ROOT/"static"/"login.html")
+            return RedirectResponse(public_path("/"),status_code=303)
+        return page("login.html")
 
     @app.post("/api/auth/login")
     async def login(payload:dict,response:Response):
@@ -94,22 +107,22 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
             raise HTTPException(status_code=401,detail="Authentication failed")
         response.set_cookie(COOKIE,expected_cookie(),httponly=True,
                             secure=os.getenv("DASHBOARD_COOKIE_SECURE","true").lower()=="true",
-                            samesite="strict",max_age=12*3600,path="/")
+                            samesite="strict",max_age=12*3600,path=base_path or "/")
         return {"authenticated":True}
 
     @app.post("/api/auth/logout")
     async def logout(request:Request,response:Response):
         require(request)
         check_origin(request)
-        response.delete_cookie(COOKIE,path="/")
+        response.delete_cookie(COOKIE,path=base_path or "/")
         desk.disarm("Operator signed out of live dashboard")
         return {"authenticated":False,"armed":False}
 
     @app.get("/")
     def index(request:Request):
         if not logged_in(request.cookies.get(COOKIE)):
-            return RedirectResponse("/login",status_code=303)
-        return FileResponse(ROOT/"static"/"index.html")
+            return RedirectResponse(public_path("/login"),status_code=303)
+        return page("index.html")
 
     @app.get("/api/state")
     def state(request:Request):

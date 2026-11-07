@@ -27,6 +27,8 @@ python -m live_desk.app
 
 Open `http://127.0.0.1:8010`. Docker Compose is `live_desk/compose.yaml`; it starts PostgreSQL 16 and binds the dashboard to `127.0.0.1:8010`, persisting signal and order data in a PostgreSQL volume. Set a private URL-safe `POSTGRES_PASSWORD` in `.env`; generate one with `openssl rand -hex 32`. The Codex sender posts through the public HTTPS bridge endpoint; a loopback-only endpoint cannot receive scheduled reports.
 
+For a prefix-stripping HTTPS proxy such as `/kotak-live/`, add `text/html` to its Nginx `sub_filter_types` when that location rewrites `/api/`, `/static/`, and `/ws`; the HTML base URL must also be rewritten. Keep `DASHBOARD_BASE_PATH` empty when Nginx already rewrites upstream redirects and cookies. For a clean prefix proxy without Nginx rewrites, use [the Nginx path example](../ops/nginx.live-path.example.conf) and set `DASHBOARD_BASE_PATH=/kotak-live`. The app then prefixes browser API, static asset, login, and WebSocket paths itself.
+
 ## Codex scheduler
 
 Use [the Codex task prompt](../bridge/CODEX_TASK_PROMPT.md) with the existing project schedule. The sender reads `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` from the ignored local `.env`; no OpenAI API key or separate HTTP action is needed. Keep the token out of prompts and reports.

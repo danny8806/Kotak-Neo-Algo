@@ -3,6 +3,7 @@ const fs=require('node:fs'),http=require('node:http'),assert=require('node:asser
 const root=path.resolve(__dirname,'../live_desk/static');
 let revision=0,healthFailure=false;const mutations=[];
 const journal={as_of:new Date().toISOString(),real_only:true,summary:{trade_count:1,closed_trade_count:1,open_trade_count:0,gross_realized_from_exits:25,gross_loss_total:0,closed_trade_return_pct:5,max_closed_trade_drawdown_gross:0,wins:1,losses:0,win_rate_pct:100,average_win:25,average_loss:null,net_after_fees:null,fees_status:'NOT AVAILABLE FROM CONFIRMED BROKER DATA',method:'Matched Kotak-confirmed entry and exit fills; descriptive only'},trades:[{session_date:'2026-11-05',symbol:'TESTA',direction:'LONG',status:'CLOSED',entry_quantity:5,exit_quantity:5,entry_average_price:100,exit_average_price:105,realized_gross:25}],events:[{observed_at:new Date().toISOString(),symbol:'TESTA',phase:'ENTRY',side:'BUY',state:'FILLED',details:'Kotak FILLED; filled 5/5'}],fills:[{first_seen_at:new Date().toISOString(),trading_symbol:'TESTA-EQ',side:'B',quantity:5,price:100,broker_fill_id:'F-TEST',broker_order_id:'O-TEST'}]};
+function nginxRewrite(value){return value.toString().replaceAll('"/api/','"/kotak-live/api/').replaceAll('"/static/','"/kotak-live/static/').replaceAll('"/health','"/kotak-live/health').replaceAll('"/ready','"/kotak-live/ready').replaceAll('"/login','"/kotak-live/login').replaceAll('"/ws','"/kotak-live/ws').replaceAll('"/"','"/kotak-live/"');}
 const state={mode:'LIVE_KOTAK_NEO_ONLY',server_time:new Date().toISOString(),session_date:'2026-11-05',
  signal_status:'READY',signals:[{symbol:'TESTA',side:'LONG',rank:1,news_summary:'Synthetic research fixture A',reason:'Test evidence for the isolated UI runner.',first_available_at:'2026-11-05T08:00:00+05:30',sources:[{url:'https://www.nseindia.com/',title:'Test reference',published_at:'2026-11-05T08:00:00+05:30'}]},{symbol:'TESTB',side:'SHORT',rank:1,news_summary:'Synthetic research fixture B',reason:'Second isolated test candidate.',sources:[]}],
  positions:[{symbol:'TESTA',side:'LONG',net_quantity:5,ltp:105,realized_gross:50,unrealized_gross:25,gross_mark_to_market:75,pnl_status:'LIVE'}],
@@ -18,17 +19,20 @@ const state={mode:'LIVE_KOTAK_NEO_ONLY',server_time:new Date().toISOString(),ses
 function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOString();}
 (async()=>{
  const server=http.createServer((req,res)=>{
-  if(req.method==='POST'){mutations.push(req.url);if(req.url!=='/api/live/settings'){res.writeHead(405);res.end();return;}let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{const data=JSON.parse(body);state.strategy.allocation_per_position=Number(data.per_position);bump();res.setHeader('Content-Type','application/json');res.end(JSON.stringify({saved:true}));});return;}
-  if(req.url.startsWith('/api/')||req.url==='/health'||req.url==='/ready'){res.setHeader('Content-Type','application/json');res.statusCode=req.url==='/ready'?503:req.url==='/health'&&healthFailure?503:200;res.end(JSON.stringify(req.url==='/api/state'?state:req.url.startsWith('/api/live/journal')?journal:{status:'test-response'}));return;}
-  const name=req.url==='/'?'index.html':req.url.replace('/static/','');
-  if(!['index.html','app.js','styles.css'].includes(name)){res.writeHead(404);res.end();return;}
-  res.setHeader('Content-Type',name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(path.join(root,name)));
+  const requestPath=(req.url||'/').replace(/^\/kotak-live(?=\/|$)/,'')||'/';
+  if(req.method==='POST'&&requestPath==='/api/auth/login'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true}));return;}
+  if(req.method==='POST'){mutations.push(requestPath);if(requestPath!=='/api/live/settings'){res.writeHead(405);res.end();return;}let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{const data=JSON.parse(body);state.strategy.allocation_per_position=Number(data.per_position);bump();res.setHeader('Content-Type','application/json');res.end(JSON.stringify({saved:true}));});return;}
+  if(requestPath.startsWith('/api/')||requestPath==='/health'||requestPath==='/ready'){res.setHeader('Content-Type','application/json');res.statusCode=requestPath==='/ready'?503:requestPath==='/health'&&healthFailure?503:200;res.end(JSON.stringify(requestPath==='/api/state'?state:requestPath.startsWith('/api/live/journal')?journal:{status:'test-response'}));return;}
+  const name=requestPath==='/'?'index.html':requestPath==='/login'?'login.html':requestPath.replace('/static/','');
+  if(!['index.html','login.html','app.js','styles.css'].includes(name)){res.writeHead(404);res.end();return;}
+  res.setHeader('Content-Type',name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':'text/html');const body=fs.readFileSync(path.join(root,name));const filled=name.endsWith('.html')?body.toString().replaceAll('__DASHBOARD_BASE_PATH__','/kotak-live'):body;res.end(nginxRewrite(filled));
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
  try{
-  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{})});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{})});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('requestfailed',r=>console.log('request_failed',r.url(),r.failure()?.errorText));
   await page.addInitScript(()=>{window.WebSocket=class {static OPEN=1;static CONNECTING=0;constructor(){this.readyState=1;window._testSocket=this;}close(){this.readyState=3;}};});
-  await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>document.getElementById('mtm').textContent==='₹75.00');
+  const origin='http://127.0.0.1:'+server.address().port;const loginPage=await browser.newPage();await loginPage.goto(origin+'/kotak-live/login');await loginPage.locator('#password').fill('Synthetic-test-password');await loginPage.locator('button.primary').click();await loginPage.waitForURL('**/kotak-live/');await loginPage.close();
+  await page.goto(origin+'/kotak-live/');await page.waitForFunction(()=>document.getElementById('mtm').textContent==='₹75.00');
   const go=async name=>{await page.locator('nav [data-view="'+name+'"]').click();await page.locator('#view-'+name).waitFor({state:'visible'});assert.equal(await page.locator('.view:visible').count(),1);};
   const push=async()=>{bump();await page.evaluate(s=>window._testSocket.onmessage({data:JSON.stringify(s)}),state);};
   assert.equal(await page.locator('#realizedPnl').textContent(),'₹50.00');assert.equal(await page.locator('#unrealizedPnl').textContent(),'₹25.00');assert.equal(await page.locator('#netPnl').textContent(),'—');
@@ -70,6 +74,6 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   await page.locator('#menuToggle').click();await go('positions');assert.match(await page.locator('#positionBody').textContent(),/unavailable/);
   await push();assert.equal(await page.locator('#positionBody .row-open').count(),1);
   assert.deepEqual(mutations,['/api/live/settings'],'Read-only checks and navigation must never mutate broker/signal state');assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({desktop:'passed',mobile:'passed',nine_separate_views:'passed',trade_journal_and_analytics:'passed',search_and_filters:'passed',full_dataset_pagination:'passed',csv_export_sanitized:'passed',detail_drawers:'passed',unsaved_settings_preserved:'passed',configuration_save_and_lock:'passed',readonly_connection_checks:'passed',stale_navigation_and_recovery:'passed',javascript_errors:0}));
+  console.log(JSON.stringify({desktop:'passed',mobile:'passed',login_and_api_paths_under_https_prefix:'passed',nine_separate_views:'passed',trade_journal_and_analytics:'passed',search_and_filters:'passed',full_dataset_pagination:'passed',csv_export_sanitized:'passed',detail_drawers:'passed',unsaved_settings_preserved:'passed',configuration_save_and_lock:'passed',readonly_connection_checks:'passed',stale_navigation_and_recovery:'passed',javascript_errors:0}));
  }finally{if(browser)await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e.stack||e.message);process.exitCode=1;});

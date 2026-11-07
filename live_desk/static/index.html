@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="color-scheme" content="light"/><title>Kotak Neo · Live desk</title><link rel="stylesheet" href="/static/styles.css"/></head>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="color-scheme" content="light"/><base href="__DASHBOARD_BASE_PATH__/"/><title>Kotak Neo · Live desk</title><link rel="stylesheet" href="static/styles.css"/></head>
 <body>
 <a class="skip-link" href="#workspace">Skip to workspace</a>
 <div class="app-shell">
@@ -91,5 +91,5 @@
 <dialog id="armModal" class="modal"><div class="dialog-heading"><div><p class="eyebrow">REAL-MONEY EXECUTION</p><h2>Authorize this session</h2></div><button class="icon-button" id="cancelArm" aria-label="Close authorization">×</button></div><p class="muted">Confirm the session limits and broker readiness before authorizing orders.</p><form id="armForm"><label for="authorization">Type the authorization phrase</label><input id="authorization" autocomplete="off" required placeholder="I AUTHORIZE LIVE KOTAK ORDERS"/><label for="otp">Operator verification code</label><input id="otp" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" required/><p id="armError" class="negative" role="alert"></p><button type="submit" class="danger">Authorize real orders</button></form></dialog>
 <dialog id="detailDialog" class="detail-dialog"><div class="dialog-heading"><div><p class="eyebrow" id="detailEyebrow">BROKER DETAIL</p><h2 id="detailTitle">Details</h2></div><button class="icon-button" id="closeDetail" aria-label="Close details">×</button></div><div id="detailContent"></div></dialog>
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js" defer></script>
+<script src="static/app.js" defer></script>
 </body></html>

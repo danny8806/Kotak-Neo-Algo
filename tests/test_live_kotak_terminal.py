@@ -100,6 +100,28 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertFalse(state["orders_permitted_by_server"])
         self.assertEqual(state["signal_status"],"UNAVAILABLE")
 
+    def test_dashboard_subpath_supports_https_reverse_proxy(self):
+        with patch.dict(os.environ,{"DASHBOARD_BASE_PATH":"/kotak-live"}):
+            app=create_live_app(database_url=self.db_url,bearer_token=TOKEN,
+                dashboard_password=PASSWORD,session_secret=SESSION,
+                supervisor=self.supervisor,clock=self.clock,start_supervisor=False)
+        self.addCleanup(app.state.engine.dispose)
+        client=TestClient(app)
+        redirect=client.get("/",follow_redirects=False)
+        self.assertEqual(redirect.headers["location"],"/kotak-live/login")
+        login_page=client.get("/login")
+        self.assertEqual(login_page.status_code,200)
+        self.assertIn('<base href="/kotak-live/"/>',login_page.text)
+        self.assertIn("route('/api/auth/login')",login_page.text)
+        auth=client.post("/api/auth/login",json={"password":PASSWORD})
+        self.assertEqual(auth.status_code,200)
+        cookie=auth.cookies.get("kotak_live_session")
+        index=client.get("/",cookies={"kotak_live_session":cookie})
+        self.assertEqual(index.status_code,200)
+        self.assertIn('<base href="/kotak-live/"/>',index.text)
+        self.assertIn('src="static/app.js"',index.text)
+        self.assertEqual(client.get("/api/state",cookies={"kotak_live_session":cookie}).status_code,200)
+
     def test_kotak_books_available_without_news_but_orders_blocked(self):
         self.supervisor.cycle()
         self.login()
