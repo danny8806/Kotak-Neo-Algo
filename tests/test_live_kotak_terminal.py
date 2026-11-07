@@ -565,6 +565,39 @@ class KotakOrderSafetyTests(unittest.TestCase):
         self.assertEqual(len(submit_tags),10)
         self.assertTrue(all(row["state"]=="FILLED" for row in rows))
 
+    def test_independent_ledger_workers_serialize_position_caps_without_deadlock(self):
+        """Separate app/worker engines must share PostgreSQL cap reservations."""
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        import time as wall_clock
+
+        second_worker = LiveLedger(self.db_url)
+        self.addCleanup(second_worker.close)
+        ledgers = (self.ledger, second_worker)
+        symbols = [f"PARLONG{i}" for i in range(10)] + [f"PARSHORT{i}" for i in range(10)]
+        gate = Barrier(len(symbols))
+
+        def reserve(index, symbol):
+            side = "BUY" if symbol.startswith("PARLONG") else "SELL"
+            gate.wait(timeout=8)
+            return ledgers[index % 2].reserve_entry(
+                session_date=TODAY.date(), symbol=symbol, side=side, quantity=1,
+                reference_price=Decimal("100"), at=TODAY, max_per_side=5,
+                gross_cap=Decimal("10000"), max_total=10)
+
+        started = wall_clock.monotonic()
+        with ThreadPoolExecutor(max_workers=len(symbols)) as pool:
+            results = list(pool.map(lambda item: reserve(*item), enumerate(symbols)))
+        elapsed = wall_clock.monotonic() - started
+        accepted = [row for row in results if row is not None]
+        self.assertLess(elapsed, 10, "Concurrent reservations stalled; possible lock contention/deadlock")
+        self.assertEqual(len(accepted), 10)
+        self.assertEqual(sum(row["side"] == "BUY" for row in accepted), 5)
+        self.assertEqual(sum(row["side"] == "SELL" for row in accepted), 5)
+        self.assertEqual(len({row["symbol"] for row in accepted}), 10)
+        persisted = [row for row in self.ledger.snapshot(TODAY.date()) if row["phase"] == "ENTRY"]
+        self.assertEqual(len(persisted), 10)
+
     def test_durable_intent_rejects_duplicate_entry(self):
         args=dict(session_date=TODAY.date(),symbol="TESTA",side="BUY",
                   quantity=10,reference_price=Decimal("100"),at=TODAY,

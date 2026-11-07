@@ -12,7 +12,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text, create_engine, select, update
+from sqlalchemy import (Column, DateTime, Integer, MetaData, String, Table, Text,
+                        create_engine, select, text, update)
 from sqlalchemy.exc import IntegrityError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -94,6 +95,12 @@ def create_app(*, database_url: str | None = None, bearer_token: str | None = No
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         digest = hashlib.sha256(raw.encode()).hexdigest()
         with engine.begin() as connection:
+            # Serialize independent batches for this session across app workers.
+            # Without this lock, concurrent first batches can race on the unique
+            # signal_reports.session_date row and one valid batch is rejected.
+            connection.execute(text(
+                "SELECT pg_advisory_xact_lock(hashtext('signal-ingest'), hashtext(:day))"
+            ), {"day": payload["session_date"]})
             existing_batch = connection.execute(select(signal_batches).where(
                 signal_batches.c.idempotency_key == idempotency_key)).mappings().first()
             if existing_batch:
