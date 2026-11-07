@@ -4,17 +4,18 @@ The live app receives the daily research report, maps its symbols to Dhan NSE EQ
 
 ## One direct daily path
 
-1. ChatGPT prepares the complete schema v1.0 report by 09:00 IST.
-2. The scheduled task's authorized HTTPS action POSTs the report directly to `https://<dashboard-host>/api/v1/signals/incoming` using the bridge Bearer token and idempotency key.
+1. The Codex schedule runs at 09:02 IST on weekdays and prepares up to five LONG and five SHORT candidates with source evidence.
+2. `node bridge/send_codex.js <report.json>` reads the bridge URL and token from the ignored local `.env` and posts the report to `https://deltacapitals.systems/api/v1/signals/incoming` over HTTPS.
 
 Signal intake is restricted to the official Nifty 500 constituent snapshot in `nifty500_universe.json`; the live dashboard refuses out-of-universe candidates. Refresh this checked snapshot before each release with `python scripts/refresh_nifty500_universe.py`. The 45-day freshness limit fails closed if it is neglected.
 
-The operational trading snapshot keeps standard NSE `EQ` series with Indian `INE` equity ISINs. REIT units, trade-to-trade series and placeholder rows remain visible in the full constituent audit but are excluded from eligible trading symbols.
 3. The bridge validates the date, cutoff, sources and JSON contract, stores the report and returns `ACCEPTED` or `DUPLICATE`. The task checks the status and hash. No verified receipt means no entry signals.
 4. The supervisor resolves current NSE cash-equity mappings, reads the 09:15 Dhan candle and listens for fresh Dhan ticks.
 5. LONG qualifies on a direct cross above the candle high; SHORT qualifies on a direct cross below its low. The system submits whole-share MIS `MKT` requests and reconciles fills from Kotak's reports. Kotak's current guidance describes conversion of API market requests into protected limit orders; submission does not guarantee a fill. Configured square-off is 15:15 IST.
 
-The dashboard embeds the receiver in `bridge/app.py`. GitHub is not part of this daily signal path. A running scheduled task alone does not prove delivery; inspect its acknowledgment and the authenticated dashboard state.
+The operational trading snapshot keeps standard NSE `EQ` series with Indian `INE` equity ISINs. REIT units, trade-to-trade series and placeholder rows remain visible in the full constituent audit but are excluded from eligible trading symbols.
+
+The dashboard embeds the receiver in `bridge/app.py`. GitHub is not part of this daily signal path. The schedule reports delivery only after an `ACCEPTED` or `DUPLICATE` acknowledgment.
 
 ## Run locally
 
@@ -24,11 +25,11 @@ Use Python 3.11+ and install `requirements-live.txt`. Configure `SIGNAL_DATABASE
 python -m live_desk.app
 ```
 
-Open `http://127.0.0.1:8010`. Docker Compose is `live_desk/compose.yaml`; it starts PostgreSQL 16 and binds the dashboard to `127.0.0.1:8010`, persisting signal and order data in a PostgreSQL volume. Set a private URL-safe `POSTGRES_PASSWORD` in `.env`; generate one with `openssl rand -hex 32`. A cloud ChatGPT task cannot reach loopback; production delivery needs a public HTTPS hostname and reverse proxy.
+Open `http://127.0.0.1:8010`. Docker Compose is `live_desk/compose.yaml`; it starts PostgreSQL 16 and binds the dashboard to `127.0.0.1:8010`, persisting signal and order data in a PostgreSQL volume. Set a private URL-safe `POSTGRES_PASSWORD` in `.env`; generate one with `openssl rand -hex 32`. The Codex sender posts through the public HTTPS bridge endpoint; a loopback-only endpoint cannot receive scheduled reports.
 
-## Connect ChatGPT
+## Codex scheduler
 
-Use [the task prompt](../bridge/CHATGPT_TASK_PROMPT.md). Store the matching `SIGNAL_BRIDGE_TOKEN` in an authorized ChatGPT connected app/action that can make HTTPS POST requests. Do not put the token in the task prompt. This repository implements the HTTP receiver and command-line sender; it cannot grant app permissions or establish that a scheduled task has an HTTP-capable action. The task must report `NOT DELIVERED` until a valid acknowledgment is received.
+Use [the Codex task prompt](../bridge/CODEX_TASK_PROMPT.md). The sender reads `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` from the ignored local `.env`; no OpenAI API key or separate HTTP action is needed. Keep the token out of prompts and reports.
 
 ## Trading configuration
 
