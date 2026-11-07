@@ -366,6 +366,7 @@ class LiveSupervisor:
         position=broker_view.positions(self.broker,current_quotes)
         orders=broker_view.orders(self.broker)
         fills=broker_view.fills(self.broker)
+        self.ledger.record_broker_fills(fills, now)
         cash=self._broker_cash()
         prior_recovery=self.ledger.prior_session_recovery_count(now.date())
         now=self.now()

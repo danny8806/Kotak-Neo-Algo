@@ -47,7 +47,10 @@ There is no stop-loss or daily-loss cutoff. At 15:15 the supervisor checks the l
 - `dhan_data.py`, `dhan_instruments.py`, `ticker.py`: read-only data, mapping and live prices.
 - `kotak_gateway.py`, `kotak_instruments.py`, `broker_view.py`: Kotak login, orders, reconciliation and broker reports.
 - `ledger.py`: persistent order intents and state changes.
+- `analytics.py`: descriptive, broker-confirmed trade outcome summaries; it never changes strategy or places orders.
 - `static/`: dashboard UI.
+
+The authenticated **Trade journal** view and `GET /api/live/journal` retain entry/exit intents, state-change events, and deduplicated Kotak fills in PostgreSQL. Fill history starts at deployment; it does not backfill older broker fills. Closed-trade gross P&L is calculated from confirmed entry and exit average prices and quantities. Partial exits are shown separately with remaining quantity. Closed-trade return uses confirmed entry notional; gross loss and drawdown are shown before fees. Fees, taxes, and net performance stay unavailable unless authoritative broker charge data is added. Win rate and average win/loss are descriptive historical statistics, not a trained model or a promise of future results. The endpoint is bounded to the latest 5,000 records per record type.
 
 CI uses mocked broker responses; it does not establish live account behavior or profitability.
 

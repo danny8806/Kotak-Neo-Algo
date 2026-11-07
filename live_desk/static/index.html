@@ -14,6 +14,7 @@
 <a href="#positions" data-view="positions"><span class="nav-icon">▥</span>Positions &amp; P&amp;L</a>
 <a href="#orders" data-view="orders"><span class="nav-icon">↗</span>Order book</a>
 <a href="#fills" data-view="fills"><span class="nav-icon">⇄</span>Executed fills</a>
+<a href="#journal" data-view="journal"><span class="nav-icon">▤</span>Trade journal</a>
 <div class="nav-label">OPERATIONS</div>
 <a href="#connections" data-view="connections"><span class="nav-icon">◎</span>Connections &amp; checks</a>
 <a href="#settings" data-view="settings"><span class="nav-icon">⚙</span>Configuration<span id="unsavedDot" class="unsaved-dot" hidden></span></a>
@@ -61,6 +62,20 @@
 <section class="view" id="view-fills" aria-label="Executed fills" hidden>
 <div class="workspace-toolbar"><div class="search-box"><span>⌕</span><input id="fillSearch" data-search="fills" type="search" placeholder="Search stock or fill ID…" aria-label="Search fills"/></div><button class="secondary small" data-export="fills">Export CSV ↗</button></div>
 <article class="panel table-panel"><div class="panel-heading"><div><h2>Real executed fills</h2><p>Confirmed broker executions; order intents are separate</p></div><span class="subtle-tag" id="fillCount">—</span></div><div class="table-scroll"><table><thead><tr><th>Fill ID</th><th>Stock</th><th class="numeric">Filled quantity</th><th class="numeric">Fill price</th><th>Broker time</th><th></th></tr></thead><tbody id="fillBody"></tbody></table></div><div class="pagination" id="fillsPagination"></div></article>
+</section>
+<section class="view" id="view-journal" aria-label="Trade journal and performance" hidden>
+<div class="notice">Historical analytics use Kotak-confirmed entry and exit fills. P&amp;L is gross; fees and taxes are unavailable unless supplied by the broker. Metrics describe past outcomes and do not change the strategy.</div>
+<div class="overview-metrics journal-metrics">
+<article class="metric"><div class="metric-top"><span>Closed trades</span></div><div class="value" id="journalClosed">—</div><p>Confirmed entry and exit fills</p></article>
+<article class="metric"><div class="metric-top"><span>Realized gross</span></div><div class="value" id="journalGross">—</div><p>Confirmed exits · before fees</p></article>
+<article class="metric"><div class="metric-top"><span>Win rate</span></div><div class="value" id="journalWinRate">—</div><p>Closed trades only</p></article>
+<article class="metric"><div class="metric-top"><span>Open / pending</span></div><div class="value" id="journalOpen">—</div><p>Includes unresolved entry or exit</p></article>
+<article class="metric"><div class="metric-top"><span>Gross losses</span></div><div class="value" id="journalLoss">—</div><p>Closed losing trades · before fees</p></article>
+<article class="metric"><div class="metric-top"><span>Closed capital return</span></div><div class="value" id="journalReturn">—</div><p>Gross P&amp;L ÷ confirmed entry notional</p></article>
+</div>
+<article class="panel table-panel"><div class="panel-heading"><div><h2>Trade performance</h2><p id="journalAsOf">Loading persisted trade history…</p></div><span class="subtle-tag" id="journalFees">FEES UNAVAILABLE</span></div><div class="table-scroll"><table><thead><tr><th>Date</th><th>Stock</th><th>Direction</th><th>State</th><th class="numeric">Entry qty</th><th class="numeric">Exit qty</th><th class="numeric">Entry avg</th><th class="numeric">Exit avg</th><th class="numeric">Gross realized</th></tr></thead><tbody id="journalTradeBody"></tbody></table></div></article>
+<article class="panel table-panel"><div class="panel-heading"><div><h2>Order lifecycle history</h2><p>Durable intent state changes observed by the dashboard</p></div></div><div class="table-scroll"><table><thead><tr><th>Time</th><th>Stock</th><th>Phase</th><th>Side</th><th>State</th><th>Details</th></tr></thead><tbody id="journalEventBody"></tbody></table></div></article>
+<article class="panel table-panel"><div class="panel-heading"><div><h2>Persisted broker fills</h2><p>Deduplicated history collected during broker-book refreshes</p></div><span class="subtle-tag" id="journalFillCount">0 fills</span></div><div class="table-scroll"><table><thead><tr><th>Time</th><th>Stock</th><th>Side</th><th class="numeric">Quantity</th><th class="numeric">Price</th><th>Broker fill ID</th><th>Order ID</th></tr></thead><tbody id="journalFillBody"></tbody></table></div><div class="table-note">History begins when this version is deployed. Older fills are not backfilled.</div></article>
 </section>
 <section class="view" id="view-connections" aria-label="Connections and diagnostics" hidden>
 <div class="connection-cards" id="connectionCards"></div>

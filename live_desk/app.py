@@ -7,12 +7,13 @@ from __future__ import annotations
 import asyncio, hashlib, hmac, os
 from datetime import datetime
 from pathlib import Path
-from fastapi import HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from bridge.app import create_app as bridge_app
 from live_desk.dhan_data import IST, totp_now
 from live_desk.supervisor import LiveSupervisor
+from live_desk.analytics import build_trade_journal
 from live_desk.universe import load_nifty500_symbols
 
 ROOT=Path(__file__).resolve().parent
@@ -145,6 +146,13 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
         require(request)
         s=desk.snapshot()
         return {"as_of":s["broker_books_updated_at"],"fills":s["fills"],"real_only":True}
+
+    @app.get("/api/live/journal")
+    def trade_journal(request:Request,limit:int=Query(default=500,ge=1,le=5000)):
+        require(request)
+        stored=desk.ledger.journal_snapshot(limit)
+        return {"as_of":desk.now(),"real_only":True,
+                **build_trade_journal(stored["intents"],stored["events"],stored["fills"])}
 
     @app.post("/api/live/arm")
     async def arm(request:Request,payload:dict):

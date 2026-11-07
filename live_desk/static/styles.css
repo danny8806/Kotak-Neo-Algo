@@ -26,3 +26,5 @@ table{font-size:11px}th{font-size:9px;color:#6b8293}.code,td.code{font-size:11px
 }
 
 .sidebar{overflow-y:auto;overscroll-behavior:contain}.interactive-row{cursor:pointer}
+.journal-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:960px){.journal-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}

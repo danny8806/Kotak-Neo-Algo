@@ -115,6 +115,7 @@ def fills(client):
         out.append({"symbol":t[:-3],"trading_symbol":t,
             "broker_order_id":str(item.get("nOrdNo") or ""),
             "fill_id":str(item.get("flId") or ""),
+            "side":str(item.get("trnsTp") or item.get("transaction_type") or ""),
             "filled_quantity":str(item.get("fldQty") or ""),
             "fill_price":str(item.get("avgPrc") or ""),
             "fill_time":str(item.get("flDtTm") or item.get("ordDtTm") or "")})

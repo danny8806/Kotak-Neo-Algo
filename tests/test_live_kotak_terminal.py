@@ -81,7 +81,7 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.text)
 
     def test_login_required_for_broker_books(self):
-        for path in ("/","/api/state","/api/live/orders","/api/live/positions","/api/live/fills"):
+        for path in ("/","/api/state","/api/live/orders","/api/live/positions","/api/live/fills","/api/live/journal"):
             with self.subTest(path=path):
                 response=self.client.get(path,follow_redirects=False)
                 self.assertIn(response.status_code,(303,401))
@@ -110,6 +110,16 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertIsNone(rows[0]["gross_mark_to_market"])
         self.assertFalse(self.client.get("/api/state").json()["armed"])
         self.assertEqual(self.broker.order_calls,0)
+
+    def test_trade_journal_is_authenticated_and_uses_durable_records(self):
+        self.login()
+        response=self.client.get("/api/live/journal")
+        self.assertEqual(response.status_code,200,response.text)
+        body=response.json()
+        self.assertTrue(body["real_only"])
+        self.assertEqual(body["summary"]["trade_count"],0)
+        self.assertIsNone(body["summary"]["net_after_fees"])
+        self.assertEqual(body["summary"]["wins"],0)
 
     def test_live_order_arming_rejected_by_default(self):
         self.supervisor.cycle()
