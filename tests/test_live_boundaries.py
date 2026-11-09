@@ -46,6 +46,23 @@ class LiveBoundaryTests(unittest.TestCase):
         self.assertIsNone(candidate_entry(tick_at=cutoff, **decision))
         self.assertIsNone(candidate_entry(tick_at=cutoff+timedelta(seconds=1), **decision))
 
+    def test_sizing_rounds_to_whole_shares_and_respects_total_cap(self):
+        policy = LivePolicy(time(9, 30), time(15, 15), 2, 1, 3,
+                            Decimal("125500.25"), Decimal("300000.25"), "end")
+        tick_at = datetime(2026, 11, 5, 9, 17, tzinfo=IST)
+        cases = [
+            ("LONG", "320", "320.50", "320", "300", 391),
+            ("SHORT", "321", "320.50", "350", "321", 391),
+            ("LONG", "125500.25", "125500.26", "125500.25", "300", None),
+        ]
+        for side, previous, price, high, low, expected in cases:
+            with self.subTest(side=side, price=price):
+                decision = dict(side=side, previous_price=Decimal(previous), price=Decimal(price),
+                                orb_high=Decimal(high), orb_low=Decimal(low), tick_at=tick_at, policy=policy)
+                self.assertEqual(candidate_entry(**decision), expected)
+                self.assertIsNone(candidate_entry(**decision, reserved_gross=Decimal("250000.00")))
+                self.assertIsNone(candidate_entry(**decision, open_positions=3))
+
     def test_kotak_order_boundary_requires_exact_mapped_instrument(self):
         class Client:
             def __init__(self):

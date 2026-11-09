@@ -122,11 +122,15 @@ class LiveSupervisor:
                 raise ValueError("Disarm live orders before changing settings")
             try:
                 cutoff=time.fromisoformat(str(payload["entry_cutoff"]))
+                exit_at=time.fromisoformat(str(payload["exit_time"]))
+                if cutoff.tzinfo is not None or exit_at.tzinfo is not None:
+                    raise ValueError("Use IST clock times without a timezone suffix")
+                counts={name:str(payload[name]) for name in ("max_long","max_short","max_positions")}
+                if any(not value.isascii() or not value.isdecimal() for value in counts.values()):
+                    raise ValueError("Position limits must be whole numbers")
                 proposed=replace(self.policy,
-                    entry_cutoff=cutoff,
-                    exit_time=time.fromisoformat(str(payload["exit_time"])),
-                    max_long=int(payload["max_long"]), max_short=int(payload["max_short"]),
-                    max_positions=int(payload["max_positions"]),
+                    entry_cutoff=cutoff, exit_time=exit_at,
+                    **{name:int(value) for name,value in counts.items()},
                     per_position=Decimal(str(payload["per_position"])),
                     gross_cap=Decimal(str(payload["gross_cap"])))
             except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -142,7 +146,10 @@ class LiveSupervisor:
             if (not proposed.per_position.is_finite() or not proposed.gross_cap.is_finite() or
                 proposed.per_position<Decimal("1000") or proposed.per_position>Decimal("20000000") or
                 proposed.gross_cap<proposed.per_position or proposed.gross_cap>Decimal("100000000")):
-                raise ValueError("Position amount and gross cap are outside supported risk limits")
+                raise ValueError("Use at least ₹1,000 per stock and a gross cap that covers one allocation")
+            if any(value != value.quantize(Decimal("0.01"))
+                   for value in (proposed.per_position, proposed.gross_cap)):
+                raise ValueError("Capital amounts must have no more than two decimal places")
             values={"entry_cutoff":proposed.entry_cutoff.isoformat(),"exit_time":proposed.exit_time.isoformat(),
                 "max_long":str(proposed.max_long),"max_short":str(proposed.max_short),
                 "max_positions":str(proposed.max_positions),"per_position":str(proposed.per_position),

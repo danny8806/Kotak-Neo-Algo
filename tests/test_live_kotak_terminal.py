@@ -154,19 +154,45 @@ class LiveTerminalTests(unittest.TestCase):
     def test_live_settings_are_authenticated_validated_persistent_and_disarmed_only(self):
         self.login()
         headers={"Origin":"http://testserver"}
-        payload={"per_position":"50000","max_positions":"10","gross_cap":"500000",
-                 "max_long":"5","max_short":"5","entry_cutoff":"09:30","exit_time":"15:15"}
+        payload={"per_position":"125500.25","max_positions":"3","gross_cap":"300000.25",
+                 "max_long":"2","max_short":"1","entry_cutoff":"09:27","exit_time":"15:10"}
         response=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(response.status_code,200,response.text)
-        self.assertEqual(response.json()["strategy"]["max_positions"],10)
-        self.assertEqual(self.supervisor.ledger.read_settings()["per_position"],"50000")
-        over_cap=self.client.post("/api/live/settings",headers=headers,json={**payload,"max_long":"6"})
-        self.assertEqual(over_cap.status_code,400)
-        late=self.client.post("/api/live/settings",headers=headers,json={**payload,"entry_cutoff":"09:31"})
-        self.assertEqual(late.status_code,400)
-        self.assertEqual(self.supervisor.ledger.read_settings()["entry_cutoff"],"09:30:00")
-        bad=self.client.post("/api/live/settings",headers=headers,json={**payload,"exit_time":"09:25"})
-        self.assertEqual(bad.status_code,400)
+        expected={"allocation_per_position":"125500.25","gross_cap":"300000.25",
+                  "max_positions":3,"max_long":2,"max_short":1,
+                  "entry_cutoff":"09:27:00","exit_time":"15:10:00"}
+        self.assertEqual(response.json()["strategy"],expected)
+        restarted=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=self.clock,
+                                 kotak_factory=lambda:self.broker)
+        self.addCleanup(restarted.ledger.close)
+        saved=restarted.snapshot()["strategy"]
+        self.assertEqual({name:saved[name] for name in expected},expected)
+        policy=restarted.policy
+        price=Decimal("320.50")
+        quantity=candidate_entry(side="LONG",previous_price=Decimal("320"),price=price,
+                                 orb_high=Decimal("320"),orb_low=Decimal("300"),
+                                 tick_at=TODAY,policy=policy)
+        self.assertEqual(quantity,391)
+        for symbol,side,side_cap in [("TESTA","BUY",policy.max_long),("TESTB","BUY",policy.max_long),
+                                     ("TESTC","SELL",policy.max_short)]:
+            reservation=restarted.ledger.reserve_entry(session_date=TODAY.date(),symbol=symbol,
+                side=side,quantity=quantity,reference_price=price,at=TODAY,
+                max_per_side=side_cap,gross_cap=policy.gross_cap,max_total=policy.max_positions)
+            if symbol=="TESTC":
+                self.assertIsNone(reservation)
+            else:
+                self.assertIsNotNone(reservation)
+        self.assertEqual(self.broker.order_calls,0)
+        invalid=[
+            {"max_long":"6"},{"max_positions":"4"},{"max_short":1.5},{"max_long":True},
+            {"entry_cutoff":"09:31"},{"exit_time":"09:25"},{"exit_time":"15:15+05:30"},
+            {"gross_cap":"125500.24"},{"per_position":"125500.251"},{"per_position":"NaN"},
+        ]
+        for override in invalid:
+            with self.subTest(override=override):
+                bad=self.client.post("/api/live/settings",headers=headers,json={**payload,**override})
+                self.assertEqual(bad.status_code,400,bad.text)
+        self.assertEqual(self.supervisor.ledger.read_settings()["entry_cutoff"],"09:27:00")
         self.supervisor.armed=True
         locked=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(locked.status_code,400)

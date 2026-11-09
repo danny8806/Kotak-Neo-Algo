@@ -7,9 +7,9 @@ const fmt=(x,d=2)=>x===null||x===undefined||x===""||!Number.isFinite(Number(x))?
 const money=x=>x===null||x===undefined||x===""?"—":"₹"+fmt(x);
 const safeText=v=>v===undefined||v===null||v===""?"—":String(v);
 const human=v=>safeText(v).replaceAll("_"," ").toLowerCase().replace(/^./,c=>c.toUpperCase());
-const VIEWS={overview:["Overview","Session overview","YOUR SESSION AT A GLANCE","Track live P&L, the opening workflow, and order readiness."],signals:["News signals","Verified news signals","RESEARCH WORKSPACE","Inspect the current watchlist and the evidence behind each candidate."],market:["Market monitor","Opening range & instruments","MARKET DATA","Follow the opening range, observed crossings, and exact broker mappings."],positions:["Positions & P&L","Positions & profit and loss","LIVE ACCOUNT","Broker-confirmed quantities, fresh valuations, and transparent gross P&L."],orders:["Order book","Broker order book","EXECUTION WORKSPACE","Search every reported order and inspect its broker status."],fills:["Executed fills","Executed fills","BROKER-CONFIRMED ACTIVITY","Actual reported executions, quantities, and fill prices."],journal:["Trade journal","Trade journal & performance","HISTORICAL PERFORMANCE","Review persisted fills, confirmed trade outcomes, and order lifecycle events."],connections:["Connections & checks","Connections & diagnostics","SYSTEM OPERATIONS","Inspect authentication, data freshness, and read-only connection tests."],settings:["Configuration","Trading configuration","SESSION CONTROLS","Review sizing, position limits, session times, and order authorization."]};
+const VIEWS={overview:["Overview","Session overview","YOUR SESSION AT A GLANCE","Track live P&L, the opening workflow, and order readiness."],signals:["News signals","Verified news signals","RESEARCH WORKSPACE","Inspect the current watchlist and the evidence behind each candidate."],market:["Market monitor","Opening range & instruments","MARKET DATA","Follow the opening range, observed crossings, and exact broker mappings."],positions:["Positions & P&L","Positions & profit and loss","LIVE ACCOUNT","Broker-confirmed quantities, fresh valuations, and transparent gross P&L."],orders:["Order book","Broker order book","EXECUTION WORKSPACE","Search every reported order and inspect its broker status."],fills:["Executed fills","Executed fills","BROKER-CONFIRMED ACTIVITY","Actual reported executions, quantities, and fill prices."],journal:["Trade journal","Trade journal & performance","HISTORICAL PERFORMANCE","Review persisted fills, confirmed trade outcomes, and order lifecycle events."],connections:["Connections & checks","Connections & diagnostics","SYSTEM OPERATIONS","Inspect authentication, data freshness, and read-only connection tests."],settings:["Settings","Trading configuration","SESSION CONTROLS","Review sizing, position limits, session times, and order authorization."]};
 const GATES={CURRENT_SESSION_SIGNALS:["Current-session research","signals"],KOTAK_AUTHENTICATION:["Kotak authentication","connections"],DHAN_AUTHENTICATION:["Dhan authentication","connections"],BROKER_BOOKS:["Fresh broker account books","connections"],INSTRUMENT_MAPPING:["Exact instrument mappings","market"],OPENING_RANGE:["Completed opening candle","market"],MARKET_FEED:["Market feed connection","market"],FRESH_QUOTES:["Fresh exchange prices","market"],MARKET_ENTRY_WINDOW:["Entry time window","settings"],FUNDS:["Funds and gross allocation","settings"],EXECUTION_RUNTIME:["Execution runtime","connections"],SUPERVISOR_ERROR:["Supervisor health","connections"],PRIOR_SESSION_RECOVERY:["Prior-session recovery","connections"],SERVER_ORDERS_DISABLED:["Server order permission","settings"]};
-let current=null,selectedSymbol=null,ws=null,lastStateReceipt=0,lastServerTime=0,activeView="overview",settingsDirty=false,stateStale=true,streamConnected=false,signalFilter="all",positionFilter="all",marketTab="orb",toastTimer,journalData=null,journalLoading=false,journalError=null;
+let current=null,selectedSymbol=null,ws=null,lastStateReceipt=0,lastServerTime=0,activeView="overview",settingsDirty=false,settingsSaving=false,stateStale=true,streamConnected=false,signalFilter="all",positionFilter="all",marketTab="orb",toastTimer,journalData=null,journalLoading=false,journalError=null;
 const pages={positions:1,orders:1,fills:1},PAGE_SIZE=50,renderCache=new Map();
 function text(id,value){const n=$(id);if(n){const next=safeText(value);if(n.textContent!==next)n.textContent=next;}}
 function el(tag,value,cls){const n=document.createElement(tag);if(value!==undefined&&value!==null)n.textContent=String(value);if(cls)n.className=cls;return n;}
@@ -118,7 +118,50 @@ function renderSessionStatus(s){
  }
 }
 function valuesForSettings(){const s=current?.strategy||{};return {settingAllocation:s.allocation_per_position,settingMaxPositions:s.max_positions,settingGross:s.gross_cap,settingMaxLong:s.max_long,settingMaxShort:s.max_short,settingCutoff:s.entry_cutoff,settingExit:s.exit_time};}
-function syncSettings(){if(!settingsDirty)for(const [id,value] of Object.entries(valuesForSettings()))if(value!==undefined)$(id).value=value;const allowed=current&&!current.armed;for(const id of Object.keys(valuesForSettings()))$(id).disabled=!allowed;$("saveSettings").disabled=!allowed||!settingsDirty;$("resetSettings").disabled=!settingsDirty;$("unsavedDot").hidden=!settingsDirty;pill("settingsState",current?.armed?"ARMED · LOCKED":settingsDirty?"UNSAVED CHANGES":"DISARMED · EDITABLE",settingsDirty?"amber":"");}
+function canEditSettings(){
+ return Boolean(current?.strategy&&!stateStale&&!current.armed&&!settingsSaving);
+}
+function settingsPreview(){
+ const number=id=>Number($(id).value);
+ const paise=id=>Math.round(number(id)*100);
+ const perStock=paise("settingAllocation"), gross=paise("settingGross"), slots=number("settingMaxPositions");
+ const validCapital=perStock>0&&gross>=perStock&&slots>0;
+ const cash=stateStale?null:current?.available_cash;
+ text("settingsPlanned",money(validCapital?Math.min(gross,slots*perStock)/100:null));
+ text("settingsSlots",validCapital?Math.min(slots,Math.floor(gross/perStock)):null);
+ text("settingsFunds",money(cash));
+ text("settingsFundingNote",cash===null||cash===undefined?"Waiting for fresh Kotak funds.":
+  gross>0&&gross>Math.round(Number(cash)*100)?"Available funds are below the gross cap. Entries stay blocked by the funds check.":
+  "Full-size allocations use the entire per-stock budget. Actual quantities round down.");
+ const price=paise("settingsPrice"),shares=price>0&&perStock>0&&$("settingsPrice").validity.valid?
+  Math.floor(perStock/price):null;
+ text("settingsShares",shares===null?"Enter a price to estimate whole shares per stock.":
+  fmt(shares,0)+(shares===1?" share":" shares")+" · "+money(shares*price/100)+" reference notional");
+ const seconds=id=>{
+  const [hour,minute,second=0]=$(id).value.split(":").map(Number);
+  return hour*3600+minute*60+second;
+ };
+ let issue="";
+ if(gross>0&&gross<perStock)issue="Gross cap must cover at least one stock allocation.";
+ else if(slots>number("settingMaxLong")+number("settingMaxShort"))issue="Maximum stocks cannot exceed the combined LONG and SHORT limits.";
+ else if(seconds("settingExit")<=seconds("settingCutoff"))issue="Square-off must follow the entry cutoff.";
+ text("settingsValidation",issue);
+ $("settingsValidation").hidden=!issue;
+ return !issue;
+}
+function syncSettings(){
+ const fields=valuesForSettings(), allowed=canEditSettings();
+ for(const [id,value] of Object.entries(fields)){
+  if(!settingsDirty)$(id).value=value??"";
+  $(id).disabled=!allowed;
+ }
+ const valid=settingsPreview()&&!$("settingsForm").querySelector("input:invalid");
+ $("saveSettings").disabled=!allowed||!settingsDirty||!valid;
+ $("resetSettings").disabled=!allowed||!settingsDirty;
+ $("unsavedDot").hidden=!settingsDirty;
+ pill("settingsState",settingsSaving?"SAVING":stateStale?"STATUS UNAVAILABLE":current?.armed?"ARMED · LOCKED":
+  settingsDirty?"UNSAVED CHANGES":"DISARMED · EDITABLE",settingsDirty?"amber":"");
+}
 function render(s){
  const serverAt=Date.parse(s?.server_time);
  if(s?.mode!=="LIVE_KOTAK_NEO_ONLY"||!Number.isFinite(serverAt)||
@@ -234,6 +277,7 @@ function disconnected(message){
   ["stageEntries","workflowEntries"],["stageExit","workflowExit"]])workflowStage(stage,label,"Unavailable");
  for(const id of ["count","vix","navSignalCount"])text(id,null);
  text("positionOutcome","Waiting for live status");text("vixAsOf","Dhan index quote unavailable");
+ syncSettings();
  sessionBanner("Live status unavailable",message,"blocked","connections","View checks");
  text("tradingWindow","Status unavailable");
  text("bookFreshness","Unavailable");text("bookLastSync","Waiting for sync");
@@ -278,12 +322,32 @@ $("armForm").addEventListener("submit",async event=>{
  event.preventDefault();try{const r=await fetch(route("/api/live/arm"),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({acknowledgement:$("authorization").value,totp:$("otp").value})});if(!r.ok){const d=await r.json().catch(()=>({}));throw Error(typeof d.detail==="string"?d.detail:"Authorization denied");}$("armModal").close();await getState();}catch(e){text("armError",e.message);}finally{$("otp").value="";}
 });
 $("disarm").addEventListener("click",async()=>{try{const r=await fetch(route("/api/live/disarm"),{method:"POST",credentials:"same-origin"});if(!r.ok)throw Error("Disarm failed. Verify the broker account directly.");await getState();notify("New entries disarmed.");}catch(e){notify(e.message);}});
-$("settingsForm").addEventListener("input",()=>{settingsDirty=true;syncSettings();text("settingsMessage","Unsaved edits. Live updates will preserve your changes.");});
-$("resetSettings").addEventListener("click",()=>{settingsDirty=false;syncSettings();text("settingsMessage","Edits discarded. Showing the saved live configuration.");});
+$("settingsPrice").addEventListener("input",settingsPreview);
+$("settingsForm").addEventListener("input",()=>{
+ if(!canEditSettings())return;
+ settingsDirty=true;syncSettings();text("settingsMessage","Unsaved edits. Live updates will preserve your changes.");
+});
+$("resetSettings").addEventListener("click",()=>{
+ if(!canEditSettings())return;
+ settingsDirty=false;syncSettings();text("settingsMessage","Edits discarded. Showing the saved live configuration.");
+});
 $("settingsForm").addEventListener("submit",async event=>{
- event.preventDefault();const button=$("saveSettings");button.disabled=true;
- const payload={per_position:$("settingAllocation").value,max_positions:$("settingMaxPositions").value,gross_cap:$("settingGross").value,max_long:$("settingMaxLong").value,max_short:$("settingMaxShort").value,entry_cutoff:$("settingCutoff").value,exit_time:$("settingExit").value};
- try{const r=await fetch(route("/api/live/settings"),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(typeof data.detail==="string"?data.detail:"Configuration could not be saved");settingsDirty=false;text("settingsMessage","Configuration saved to the server.");await getState();syncSettings();notify("Trading configuration saved.");}catch(e){text("settingsMessage",e.message);button.disabled=current?.armed===true;}
+ event.preventDefault();
+ if(!canEditSettings()||!settingsDirty||$("saveSettings").disabled)return;
+ const payload={per_position:$("settingAllocation").value,max_positions:$("settingMaxPositions").value,
+  gross_cap:$("settingGross").value,max_long:$("settingMaxLong").value,max_short:$("settingMaxShort").value,
+  entry_cutoff:$("settingCutoff").value,exit_time:$("settingExit").value};
+ settingsSaving=true;syncSettings();
+ try{
+  const r=await fetch(route("/api/live/settings"),{method:"POST",credentials:"same-origin",
+   headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok||data.saved!==true)throw Error(typeof data.detail==="string"?data.detail:"Configuration could not be saved");
+  if(data.strategy)current={...current,strategy:{...current.strategy,...data.strategy}};
+  settingsDirty=false;text("settingsMessage","Configuration saved to the server.");
+  await getState();notify("Trading configuration saved.");
+ }catch(e){text("settingsMessage",e.message);}
+ finally{settingsSaving=false;syncSettings();}
 });
 $("logout").addEventListener("click",async()=>{try{await fetch(route("/api/auth/logout"),{method:"POST",credentials:"same-origin"});}finally{location.assign(route("/login"));}});
 document.addEventListener("keydown",event=>{if(event.key==="Escape")closeMenu();if(event.key==="/"&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){const search=document.querySelector('[data-search="'+activeView+'"]');if(search){event.preventDefault();search.focus();}}});

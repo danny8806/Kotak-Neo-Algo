@@ -25,7 +25,7 @@ function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOSt
  const server=http.createServer((req,res)=>{
   const requestPath=(req.url||'/').replace(/^\/kotak-live(?=\/|$)/,'')||'/';
   if(req.method==='POST'&&requestPath==='/api/auth/login'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true}));return;}
-  if(req.method==='POST'){mutations.push(requestPath);if(requestPath!=='/api/live/settings'){res.writeHead(405);res.end();return;}let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{const data=JSON.parse(body);state.strategy.allocation_per_position=Number(data.per_position);bump();res.setHeader('Content-Type','application/json');res.end(JSON.stringify({saved:true}));});return;}
+  if(req.method==='POST'){mutations.push(requestPath);if(requestPath!=='/api/live/settings'){res.writeHead(405);res.end();return;}let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{const data=JSON.parse(body);const {per_position,...limits}=data;Object.assign(state.strategy,limits,{allocation_per_position:per_position});bump();res.setHeader('Content-Type','application/json');res.end(JSON.stringify({saved:true,strategy:state.strategy}));});return;}
   if(requestPath.startsWith('/api/')||requestPath==='/health'||requestPath==='/ready'){res.setHeader('Content-Type','application/json');res.statusCode=requestPath==='/ready'?503:requestPath==='/health'&&healthFailure?503:200;res.end(JSON.stringify(requestPath==='/api/state'?state:requestPath.startsWith('/api/live/journal')?journal:{status:'test-response'}));return;}
   const name=requestPath==='/'?'index.html':requestPath==='/login'?'login.html':requestPath.replace('/static/','');
   if(!['index.html','login.html','app.js','styles.css'].includes(name)){res.writeHead(404);res.end();return;}
@@ -84,7 +84,37 @@ function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOSt
   await go('journal');await page.waitForFunction(()=>document.getElementById('journalClosed').textContent==='1');assert.equal(await page.locator('#journalTradeBody tr').count(),1);assert.match(await page.locator('#journalTradeBody').textContent(),/TESTA/);assert.equal(await page.locator('#journalGross').textContent(),'₹25.00');assert.equal(await page.locator('#journalLoss').textContent(),'₹0.00');assert.equal(await page.locator('#journalReturn').textContent(),'5.00%');assert.match(await page.locator('#journalEventBody').textContent(),/FILLED/);assert.match(await page.locator('#journalFillBody').textContent(),/F-TEST/);assert.match(await page.locator('#journalFees').textContent(),/NOT AVAILABLE/);
   await go('settings');assert.equal(await page.locator('#saveSettings').isDisabled(),true);await page.locator('#settingAllocation').fill('125000');await page.locator('#settingGross').focus();await push();assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');
   await go('overview');await go('settings');assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');await page.locator('#resetSettings').click();assert.equal(await page.locator('#settingAllocation').inputValue(),'100000');
-  await page.locator('#settingAllocation').fill('125000');await page.locator('#saveSettings').click();await page.waitForFunction(()=>document.getElementById('saveSettings').disabled);assert.equal(state.strategy.allocation_per_position,125000);
+  await page.locator('#settingsPrice').fill('320.50');
+  assert.match(await page.locator('#settingsShares').textContent(),/^312 shares/);
+  assert.equal(await page.locator('#saveSettings').isDisabled(),true,'Calculator does not edit settings');
+  const edits={settingAllocation:'125500.25',settingGross:'300000.25',settingMaxPositions:'3',
+    settingMaxLong:'2',settingMaxShort:'1',settingCutoff:'09:27',settingExit:'15:10'};
+  for(const [id,value] of Object.entries(edits))await page.locator('#'+id).fill(value);
+  assert.equal(await page.locator('#settingsPlanned').textContent(),'₹3,00,000.25');
+  assert.equal(await page.locator('#settingsSlots').textContent(),'2');
+  assert.equal(await page.locator('#settingsShares').textContent(),'391 shares · ₹1,25,315.50 reference notional');
+  await page.locator('#settingsPrice').fill('125500.26');
+  assert.match(await page.locator('#settingsShares').textContent(),/^0 shares/);
+  await page.locator('#settingGross').fill('125500.24');
+  assert.match(await page.locator('#settingsValidation').textContent(),/Gross cap must cover/);
+  assert.equal(await page.locator('#saveSettings').isDisabled(),true);
+  await page.locator('#settingGross').fill(edits.settingGross);
+  await page.locator('#settingMaxPositions').fill('4');
+  assert.match(await page.locator('#settingsValidation').textContent(),/combined LONG and SHORT/);
+  assert.equal(await page.locator('#saveSettings').isDisabled(),true);
+  await page.locator('#settingMaxPositions').fill(edits.settingMaxPositions);
+  await page.locator('#settingExit').fill('09:27');
+  assert.match(await page.locator('#settingsValidation').textContent(),/must follow/);
+  assert.equal(await page.locator('#saveSettings').isDisabled(),true);
+  await page.locator('#settingExit').fill(edits.settingExit);
+  await page.locator('#settingCutoff').fill('09:31');
+  assert.equal(await page.locator('#saveSettings').isDisabled(),true);
+  await page.locator('#settingCutoff').fill(edits.settingCutoff);
+  await page.locator('#saveSettings').click();
+  await page.waitForFunction(()=>document.getElementById('settingsMessage').textContent.includes('Configuration saved'));
+  await page.reload();await page.waitForFunction(()=>document.getElementById('settingAllocation').value==='125500.25');
+  for(const [id,value] of Object.entries(edits))assert.equal(await page.locator('#'+id).inputValue(),value);
+  assert.equal(await page.locator('#saveSettings').isDisabled(),true);
   state.armed=true;await push();assert.equal(await page.locator('#settingAllocation').isDisabled(),true);assert.equal(await page.locator('#saveSettings').isDisabled(),true);state.armed=false;await push();assert.equal(await page.locator('#arm').isDisabled(),true);
   state.readiness_blockers=['FRESH_QUOTES','SERVER_ORDERS_DISABLED'];await push();
   assert.equal(await page.locator('#tickFreshness').textContent(),'Stale');
