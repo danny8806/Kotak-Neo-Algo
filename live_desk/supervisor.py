@@ -259,6 +259,8 @@ class LiveSupervisor:
             if dhan.session_date!=now.date().isoformat() or set(dhan.security_ids)!=missing:
                 raise RuntimeError("NSE EQ Dhan symbol master incomplete")
             dhan_ids.update(dhan.security_ids)
+        if len(set(dhan_ids.values())) != len(dhan_ids):
+            raise RuntimeError("Duplicate Dhan security IDs in the session watchlist")
         kotak=dict(self.kotak_ids)
         if self.broker is not None:
             for symbol in sorted(wanted-set(kotak)):

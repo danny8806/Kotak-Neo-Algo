@@ -60,6 +60,13 @@ CI uses mocked broker responses; it does not establish live account behavior or 
 
 Both broker sessions authenticate at application startup and refresh at 08:00 IST while the service is running. Startup before 08:00 does not skip that morning's refresh. Kotak refresh is single-flight, uses 60–300 second failure backoff, and retries expired sessions after a cooldown. Authentication never arms orders. Dhan refresh also reconnects existing data sockets. The application must be running for its timers to execute; Compose restarts the service after a host/process restart.
 
+Dhan ticker messages can contain multiple packets. The terminal handles each
+packet and rejects duplicate security IDs before subscribing. The default
+`DHAN_TICK_TIMESTAMP_OFFSET_SECONDS=0` uses the packet epoch as supplied. Set
+`19800` only if a read-only feed capture verifies that the packet timestamps
+are consistently 5 hours 30 minutes ahead. This setting subtracts that offset
+from exchange trade time. Normal freshness checks still apply.
+
 Kotak's documented `5203 / No Data` response is accepted only as an empty positions/orders/trades book. Other response failures stay blocked. Account books refresh about every five seconds and expire after twenty seconds. Account positions outside the research watchlist receive a separate read-only Dhan ticker subscription. Open P&L is revalued on each snapshot using fresh exchange ticks; missing/stale ticks invalidate the unrealized value immediately. Closed positions retain broker-book realized P&L without a quote. Carry-forward positions with unverified cost basis show unavailable P&L. Gross P&L excludes fees; net after fees stays unavailable until authoritative charges exist. All broker-returned NSE EQ orders/fills are available without the previous row truncation.
 
 The ticker callback performs no broker HTTP requests. Mappings are prepared before opening-range construction. Durable PostgreSQL reservations serialize exposure across workers, then separate HTTP workers submit orders. Kotak calls share per-process pacing (10 mutating requests/second and 20 report requests/second); deploy one active supervisor per broker account. Deployment pins the tested Kotak SDK version. The dashboard shows both authentication states, next refresh times, the blocked stage, and stale-data status.

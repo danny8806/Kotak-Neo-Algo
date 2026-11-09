@@ -58,6 +58,39 @@ class TickerExchangeTimestampTests(unittest.TestCase):
         self.assertIsNone(parse_ticker(bytes([4])+packet[1:]))
         self.assertIsNone(parse_ticker(ticker_packet(price=float("nan"),last_trade_at=trade)))
 
+    def test_bundled_message_routes_every_tick_and_applies_configured_offset(self):
+        trade = datetime(2026, 11, 4, 9, 16, tzinfo=IST)
+        encoded_time = trade + timedelta(hours=5, minutes=30)
+        first = ticker_packet(security_id=1333, last_trade_at=encoded_time)
+        prev_close = bytes([6]) + first[1:]
+        second = ticker_packet(security_id=11536, last_trade_at=encoded_time + timedelta(seconds=1))
+        received = []
+
+        with patch.dict("os.environ", {"DHAN_TICK_TIMESTAMP_OFFSET_SECONDS": "19800"}):
+            ticker = LiveTicker(type("Dhan", (), {"websocket_url": lambda _: "wss://example.invalid"})(),
+                                {"HDFCBANK": "1333", "TCS": "11536"}, received.append)
+
+        def fake_ws(url, *, on_message, **callbacks):
+            class Socket:
+                def run_forever(self, **kwargs):
+                    on_message(self, prev_close + first + second)
+                    ticker.stop_event.set()
+            return Socket()
+
+        with patch("websocket.WebSocketApp", side_effect=fake_ws):
+            ticker._run()
+
+        self.assertEqual([(tick["symbol"], tick["timestamp"]) for tick in received],
+                         [("HDFCBANK", trade), ("TCS", trade + timedelta(seconds=1))])
+
+    def test_conflicting_id_cannot_replace_existing_subscription(self):
+        with self.assertRaisesRegex(ValueError, "share a Dhan security ID"):
+            LiveTicker(None, {"HDFCBANK": "1333", "TCS": "1333"}, lambda _: None)
+        ticker = LiveTicker(None, {"HDFCBANK": "1333"}, lambda _: None)
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            ticker.add_symbols({"TCS": "1333"})
+        self.assertEqual(ticker.map, {"1333": "HDFCBANK"})
+
 
 if __name__=="__main__":
     unittest.main()

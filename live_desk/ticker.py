@@ -4,11 +4,30 @@ Only exchange NSE_EQ subscribed symbols reach the runtime. Broker orders are
 submitted separately through Kotak Neo. Connection failures suppress entries.
 """
 from __future__ import annotations
-import json, math, struct, threading
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import json, math, os, struct, threading
+from datetime import datetime, timedelta
 from typing import Callable
 from live_desk.dhan_data import DhanDataClient, IST
+
+
+def feed_packets(message: bytes):
+    """Split a WebSocket message using each Dhan response header's length."""
+    offset = 0
+    while offset + 8 <= len(message):
+        length = struct.unpack_from("<h", message, offset + 1)[0]
+        end = offset + length
+        if length < 8 or end > len(message):
+            return
+        yield message[offset:end]
+        offset = end
+
+
+def subscription_map(securities: dict[str, str]) -> dict[str, str]:
+    mapping = {str(security_id): symbol for symbol, security_id in securities.items()}
+    if len(mapping) != len(securities):
+        raise ValueError("Multiple symbols share a Dhan security ID")
+    return mapping
+
 
 def parse_ticker(packet:bytes):
     if not isinstance(packet,bytes) or len(packet)<16:return None
@@ -27,7 +46,11 @@ def parse_ticker(packet:bytes):
 class LiveTicker:
     def __init__(self,client:DhanDataClient,securities:dict[str,str],on_tick:Callable[[dict],None]):
         self.client=client
-        self.map={str(security_id):symbol for symbol,security_id in securities.items()}
+        self.map = subscription_map(securities)
+        offset = os.getenv("DHAN_TICK_TIMESTAMP_OFFSET_SECONDS", "0")
+        if offset not in {"0", "19800"}:
+            raise ValueError("DHAN_TICK_TIMESTAMP_OFFSET_SECONDS must be 0 or 19800")
+        self.timestamp_offset = timedelta(seconds=int(offset))
         self.on_tick=on_tick
         self.lock=threading.RLock()
         self.stop_event=threading.Event()
@@ -44,8 +67,13 @@ class LiveTicker:
 
     def add_symbols(self,securities:dict[str,str]):
         """Subscribe newly mapped NSE_EQ symbols on the existing Dhan socket."""
-        additions={str(security_id):symbol for symbol,security_id in securities.items()}
+        additions = subscription_map(securities)
         with self.lock:
+            existing_ids = {symbol: security_id for security_id, symbol in self.map.items()}
+            for security_id, symbol in additions.items():
+                if (self.map.get(security_id, symbol) != symbol
+                        or existing_ids.get(symbol, security_id) != security_id):
+                    raise ValueError("Dhan subscription mapping conflicts with an existing symbol or ID")
             fresh={key:value for key,value in additions.items() if key not in self.map}
             self.map.update(fresh)
             ws=self.socket
@@ -105,29 +133,32 @@ class LiveTicker:
                     self._set(state="CONNECTED",error=None)
                 def on_message(ws,message):
                     nonlocal retry
-                    if isinstance(message,str):return
-                    tick=parse_ticker(message)
-                    if tick:
-                        with self.lock:symbol=self.map.get(tick["security_id"])
-                        if symbol is None:return
-                        if tick["segment_code"]!=1:return
-                        retry=1
-                        now=datetime.now(IST)
-                        # Dhan ticker packet carries the exchange's Last Trade Time.
-                        # NEVER replace it with local receipt time: doing so could
-                        # turn delayed or illiquid prices into executable "fresh" ticks.
-                        exchange_at=datetime.fromisoformat(tick["exchange_timestamp"])
-                        tick.update(symbol=symbol,timestamp=exchange_at,
-                                    received_at=now)
-                        self._set(last_tick=now.isoformat(),error=None,
-                                  last_exchange_trade_at=exchange_at.isoformat(),
-                                  state="CONNECTED")
-                        try:self.on_tick(tick)
+                    if not isinstance(message, bytes):
+                        return
+                    for packet in feed_packets(message):
+                        if packet[0] == 50:
+                            self._set(state="RECONNECTING", error="Dhan feed disconnected")
+                            ws.close()
+                            return
+                        tick = parse_ticker(packet)
+                        if tick is None or tick["segment_code"] != 1:
+                            continue
+                        with self.lock:
+                            symbol = self.map.get(tick["security_id"])
+                        if symbol is None:
+                            continue
+                        retry = 1
+                        now = datetime.now(IST)
+                        # Normalize only the configured feed convention. Keep the
+                        # original trade time separate from the receipt time.
+                        exchange_at = datetime.fromisoformat(tick["exchange_timestamp"]) - self.timestamp_offset
+                        tick.update(symbol=symbol, timestamp=exchange_at, received_at=now)
+                        self._set(last_tick=now.isoformat(), error=None,
+                                  last_exchange_trade_at=exchange_at.isoformat(), state="CONNECTED")
+                        try:
+                            self.on_tick(tick)
                         except Exception as exc:
                             self._set(error=f"Tick callback failed ({type(exc).__name__})")
-                    elif isinstance(message,bytes) and message and message[0]==50:
-                        self._set(state="RECONNECTING",error="Dhan feed disconnected")
-                        ws.close()
                 def on_error(ws,error):
                     self._set(state="RECONNECTING",error="Market feed transport failure")
                 def on_close(ws,code,msg):
