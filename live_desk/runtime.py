@@ -17,6 +17,7 @@ from itertools import repeat
 from live_desk.dhan_data import IST
 from live_desk.kotak_gateway import cancel_kotak_order, place_kotak_order, reconcile_kotak_tag
 from live_desk.kotak_instruments import KotakInstrument
+from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
 from live_desk.strategy import LivePolicy, candidate_entry
 
@@ -58,6 +59,7 @@ class LiveRuntime:
         self._errors: dict[str,str] = {}
         self.submissions = ThreadPoolExecutor(max_workers=20, thread_name_prefix="kotak-order")
         self.pending: set[Future] = set()
+        self.pending_entries: set[str] = set()
 
     def extend_signals(self, *, signals: list[dict], dhan_ids: dict[str, str],
                        kotak_instruments: dict[str, KotakInstrument],
@@ -139,26 +141,32 @@ class LiveRuntime:
                 side=side, previous_price=previous, price=price,
                 orb_high=high, orb_low=low, tick_at=at, policy=self.policy,
             )
-            if quantity is None:
+            if quantity is None or symbol in self.pending_entries:
                 return None
             direction = "BUY" if side == "LONG" else "SELL"
-            # The transaction enforces all exposure limits and deduplication.
-            # Ordinary ticks never read the ledger.
-            intent = self.ledger.reserve_entry(
-                session_date=self.session_date, symbol=symbol, side=direction,
-                quantity=quantity, reference_price=price, at=at,
-                max_per_side=self.policy.max_long if side == "LONG" else self.policy.max_short,
-                gross_cap=self.policy.gross_cap, max_total=self.policy.max_positions)
-            if intent is None:
-                return None
-            future = self.submissions.submit(self._submit_and_reconcile, intent, at)
+            future = self.submissions.submit(self._reserve_and_submit, symbol, direction, quantity, price, at)
+            self.pending_entries.add(symbol)
             self.pending.add(future)
-            future.add_done_callback(self._submission_done)
-            return {"tag": intent["tag"], "state": "SUBMISSION_QUEUED"}
+            future.add_done_callback(lambda done: self._submission_done(done, symbol))
+            return {"symbol": symbol, "state": "SUBMISSION_QUEUED"}
 
-    def _submission_done(self, future: Future) -> None:
+    def _reserve_and_submit(self, symbol, direction, quantity, price, at):
+        if not self._entry_may_send(at):
+            return
+        # PostgreSQL still owns deduplication and every exposure limit.
+        intent = self.ledger.reserve_entry(
+            session_date=self.session_date, symbol=symbol, side=direction,
+            quantity=quantity, reference_price=price, at=at,
+            max_per_side=self.policy.max_long if direction == "BUY" else self.policy.max_short,
+            gross_cap=self.policy.gross_cap, max_total=self.policy.max_positions)
+        if intent:
+            self._submit_and_reconcile(intent, at)
+
+    def _submission_done(self, future: Future, symbol: str | None = None) -> None:
         with self.lock:
             self.pending.discard(future)
+            if symbol is not None:
+                self.pending_entries.discard(symbol)
         if not future.cancelled() and future.exception() is not None:
             self._error("SUBMISSION_WORKER","Submission worker failed; durable intent requires review")
 
@@ -171,17 +179,23 @@ class LiveRuntime:
         _, unfinished = wait(pending, timeout=timeout)
         return not unfinished
 
+    def _entry_may_send(self, at: datetime) -> bool:
+        now = self.clock().astimezone(IST)
+        return (self.enabled and not self.close_only and now.date() == self.session_date
+                and now.time() < self.policy.entry_cutoff
+                and timedelta(seconds=-2) <= now - at.astimezone(IST) <= timedelta(seconds=5))
+
     def _submit_and_reconcile(self, intent: dict, at: datetime) -> dict:
         tag = intent["tag"]
-        with self.lock:
-            now=self.clock().astimezone(IST)
-            if intent.get("phase","ENTRY")=="ENTRY" and (
-                    not self.enabled or self.close_only or now.date()!=self.session_date or
-                    now.time()>=self.policy.entry_cutoff or now-at.astimezone(IST)>timedelta(seconds=5)):
-                self.ledger.mark_not_submitted(tag,now)
-                return {"tag":tag,"state":"ABORTED"}
-            # This durable transition is the commit point before network I/O.
-            self.ledger.mark_submission_unknown(tag, now)
+        is_entry = intent.get("phase", "ENTRY") == "ENTRY"
+        if is_entry and not self._entry_may_send(at):
+            self.ledger.mark_not_submitted(tag, self.clock())
+            return {"tag": tag, "state": "ABORTED"}
+        # Persist before network I/O, without holding the tick reader's lock.
+        self.ledger.mark_submission_unknown(tag, self.clock())
+        if is_entry and not self._entry_may_send(at):
+            self.ledger.mark_not_submitted(tag, self.clock(), committed_for_send=True)
+            return {"tag": tag, "state": "ABORTED"}
         result=None
         try:
             result = place_kotak_order(self.broker, self.kotak_instruments[intent["symbol"]],
@@ -200,18 +214,33 @@ class LiveRuntime:
                 self._error(tag,f"{intent['symbol']}: {type(exc).__name__}; reconcile tag {tag}")
         return {"tag": tag, "state": "SUBMISSION_UNKNOWN"}
 
-    def reconcile_pending(self, at: datetime) -> None:
+    def reconcile_pending(self, at: datetime, *, books=None, observed_at=None) -> None:
         with self.lock:
             if self.pending:
                 return
-        for row in self.ledger.snapshot(self.session_date):
-            if row["state"] in {"SUBMISSION_UNKNOWN", "ACKNOWLEDGED", "PARTIAL", "CANCEL_PENDING"}:
-                try:
+        pending = [
+            row for row in self.ledger.snapshot(self.session_date)
+            if row["state"] in {"SUBMISSION_UNKNOWN", "ACKNOWLEDGED", "PARTIAL", "CANCEL_PENDING"}
+            and (observed_at is None or row["updated_at"] <= observed_at)
+        ]
+        if books is None and len(pending) > 1:
+            try:
+                books = (book_rows(self.broker.order_report(), "orders"),
+                         book_rows(self.broker.trade_report(), "trades"))
+            except Exception:
+                for row in pending:
+                    self._error(row["tag"], f"{row['symbol']}: broker reconciliation pending")
+                return
+        for row in pending:
+            try:
+                if books is None:
                     report = reconcile_kotak_tag(self.broker, row["tag"])
-                    self.ledger.apply_broker_report(report, at)
-                    self._clear_error(row["tag"])
-                except Exception:
-                    self._error(row["tag"],f"{row['symbol']}: broker reconciliation pending")
+                else:
+                    report = reconcile_kotak_tag(self.broker, row["tag"], books=books)
+                self.ledger.apply_broker_report(report, at)
+                self._clear_error(row["tag"])
+            except Exception:
+                self._error(row["tag"], f"{row['symbol']}: broker reconciliation pending")
 
     def exit_due(self, at: datetime, *, read_positions=None) -> list[dict]:
         if at.astimezone(IST).date() != self.session_date or at.astimezone(IST).time() < self.policy.exit_time:

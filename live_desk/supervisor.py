@@ -17,9 +17,10 @@ from bridge.app import reports
 from scripts.validate_signals import validate
 from live_desk.dhan_data import DhanDataClient, DhanTokenSupervisor, IST
 from live_desk.dhan_instruments import fetch_dhan_symbols
-from live_desk.kotak_gateway import KotakCredentials, login_kotak
+from live_desk.kotak_gateway import KotakCredentials, login_kotak, reconcile_kotak_tag
 from live_desk.kotak_auth import KotakSession
 from live_desk.kotak_instruments import lookup_kotak_equity
+from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
 from live_desk.strategy import load_policy
 from live_desk.orb import opening_range
@@ -364,19 +365,23 @@ class LiveSupervisor:
                 if timedelta(0)<=age<=PRICE_EXPIRY:
                     current_quotes[symbol]=dict(q)
         position=broker_view.positions(self.broker,current_quotes)
-        orders=broker_view.orders(self.broker)
-        fills=broker_view.fills(self.broker)
+        observed_at = self.now()
+        order_rows = book_rows(self.broker.order_report(), "orders")
+        trade_rows = book_rows(self.broker.trade_report(), "trades")
+        books = (order_rows, trade_rows)
+        orders=broker_view.orders(self.broker, rows=order_rows)
+        fills=broker_view.fills(self.broker, rows=trade_rows)
         self.ledger.record_broker_fills(fills, now)
         cash=self._broker_cash()
         prior_recovery=self.ledger.prior_session_recovery_count(now.date())
         now=self.now()
-        if self.runtime:self.runtime.reconcile_pending(now)
+        if self.runtime:
+            self.runtime.reconcile_pending(now, books=books, observed_at=observed_at)
         else:
             # Unknown outcomes survive restarts even without today's research.
-            from live_desk.kotak_gateway import reconcile_kotak_tag
             for row in self.ledger.snapshot(now.date()):
-                if row["state"] in {"SUBMISSION_UNKNOWN","ACKNOWLEDGED","PARTIAL","CANCEL_PENDING"}:
-                    try:self.ledger.apply_broker_report(reconcile_kotak_tag(self.broker,row["tag"]),now)
+                if row["updated_at"] <= observed_at and row["state"] in {"SUBMISSION_UNKNOWN","ACKNOWLEDGED","PARTIAL","CANCEL_PENDING"}:
+                    try:self.ledger.apply_broker_report(reconcile_kotak_tag(self.broker,row["tag"],books=books),now)
                     except Exception:LOG.warning("Persisted Kotak intent still requires reconciliation")
         with self.lock:
             self.broker_positions=position

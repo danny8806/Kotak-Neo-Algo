@@ -88,8 +88,9 @@ def pnl_summary(positions,*,books_fresh):
             'fees_status':'NOT_AVAILABLE','books_fresh':books_fresh,
             'unpriced_open_positions':sum(bool(row['net_quantity']) and row.get('unrealized_gross') is None for row in positions)}
 
-def orders(client):
-    rows=_rows(client.order_report(),"orders")
+def orders(client, *, rows=None):
+    if rows is None:
+        rows=_rows(client.order_report(),"orders")
     out=[]
     for item in rows:
         if not isinstance(item,dict):continue
@@ -105,8 +106,9 @@ def orders(client):
             "tag":str(item.get("GuiOrdId") or "")})
     return out
 
-def fills(client):
-    rows=_rows(client.trade_report(),"trades")
+def fills(client, *, rows=None):
+    if rows is None:
+        rows=_rows(client.trade_report(),"trades")
     out=[]
     for item in rows:
         if not isinstance(item,dict):continue

@@ -173,11 +173,12 @@ class LiveLedger:
                 state="CANCEL_PENDING", updated_at=stamp))
             self._event(db, tag, "CANCEL_PENDING", "One broker cancellation attempt is in progress", stamp)
 
-    def mark_not_submitted(self, tag: str, at: datetime) -> None:
+    def mark_not_submitted(self, tag: str, at: datetime, *, committed_for_send: bool = False) -> None:
         """An entry lost authorization/freshness while queued; no broker call was made."""
         with self.lock, self.engine.begin() as db:
             row=db.execute(select(intents.c.state).where(intents.c.tag==tag).with_for_update()).first()
-            if not row or row.state!="RESERVED":
+            expected = "SUBMISSION_UNKNOWN" if committed_for_send else "RESERVED"
+            if not row or row.state != expected:
                 raise ValueError("Only an unsent reservation can be aborted")
             db.execute(update(intents).where(intents.c.tag==tag).values(state="ABORTED",updated_at=at))
             self._event(db,tag,"ABORTED","Unsent entry no longer authorized or fresh",at)

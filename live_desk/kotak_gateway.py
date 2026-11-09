@@ -66,11 +66,11 @@ def place_kotak_order(client, instrument: KotakInstrument, side: str,
             "requires_reconciliation": True, "tag": tag}
 
 
-def reconcile_kotak_tag(client, tag: str) -> dict:
+def reconcile_kotak_tag(client, tag: str, *, books=None) -> dict:
     """Read actual Kotak order state and trade fills for one caller tag."""
     if not tag:
         raise ValueError("Order tag is required")
-    orders = book_rows(client.order_report(), "orders")
+    orders = books[0] if books is not None else book_rows(client.order_report(), "orders")
     matching = [row for row in orders if row.get("GuiOrdId") == tag]
     if len(matching) != 1:
         raise RuntimeError("Kotak order tag missing or ambiguous")
@@ -78,7 +78,7 @@ def reconcile_kotak_tag(client, tag: str) -> dict:
     order_id = str(order.get("nOrdNo") or "")
     if not order_id:
         raise RuntimeError("Kotak order ID missing")
-    trades = book_rows(client.trade_report(), "trades")
+    trades = books[1] if books is not None else book_rows(client.trade_report(), "trades")
     fills = [row for row in trades if
              str(row.get("nOrdNo") or "") == order_id]
     fill_ids = set()

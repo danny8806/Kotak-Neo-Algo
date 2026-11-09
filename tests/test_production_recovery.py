@@ -316,6 +316,31 @@ class ProductionReplayTests(unittest.TestCase):
             tick=pool.submit(runtime.on_tick,{'symbol':'TESTA','ltp':'99','timestamp':NOW})
             self.assertIsNone(tick.result(timeout=.5));release.set();pending.result(timeout=2)
 
+    def test_slow_reservation_does_not_block_ticks_and_disarm_prevents_send(self):
+        runtime = self.runtime()
+        started, release = threading.Event(), threading.Event()
+        reserve = self.ledger.reserve_entry
+
+        def slow_reserve(**kwargs):
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("Test did not release the reservation")
+            return reserve(**kwargs)
+
+        with patch.object(self.ledger, "reserve_entry", side_effect=slow_reserve):
+            try:
+                self.assertEqual(self.cross(runtime)["state"], "SUBMISSION_QUEUED")
+                self.assertTrue(started.wait(1))
+                runtime.on_tick({"symbol": "TESTA", "ltp": "102", "timestamp": NOW})
+                self.assertEqual(runtime.previous["TESTA"], Decimal("102"))
+                runtime.enabled = False
+            finally:
+                release.set()
+            self.assertTrue(runtime.wait_for_submissions())
+
+        self.assertEqual(runtime.broker.calls, [])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"], "ABORTED")
+
     def test_malformed_ticks_are_ignored_without_killing_feed_callback(self):
         runtime=self.runtime()
         for price in (None,'bad','NaN','Infinity',0,-1):
