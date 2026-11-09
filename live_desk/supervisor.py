@@ -22,7 +22,7 @@ from live_desk.kotak_auth import KotakSession
 from live_desk.kotak_instruments import lookup_kotak_equity
 from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
-from live_desk.strategy import load_policy
+from live_desk.strategy import LATEST_ENTRY_CUTOFF, load_policy
 from live_desk.orb import opening_range
 from live_desk.runtime import MAX_ENTRY_TICK_AGE, LiveRuntime
 from live_desk.ticker import LiveTicker
@@ -121,8 +121,9 @@ class LiveSupervisor:
             if self.armed:
                 raise ValueError("Disarm live orders before changing settings")
             try:
+                cutoff=time.fromisoformat(str(payload["entry_cutoff"]))
                 proposed=replace(self.policy,
-                    entry_cutoff=time.fromisoformat(str(payload["entry_cutoff"])),
+                    entry_cutoff=cutoff,
                     exit_time=time.fromisoformat(str(payload["exit_time"])),
                     max_long=int(payload["max_long"]), max_short=int(payload["max_short"]),
                     max_positions=int(payload["max_positions"]),
@@ -130,6 +131,8 @@ class LiveSupervisor:
                     gross_cap=Decimal(str(payload["gross_cap"])))
             except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
                 raise ValueError("Settings have invalid or missing values") from exc
+            if cutoff>LATEST_ENTRY_CUTOFF:
+                raise ValueError("Entry cutoff cannot be later than 09:30 IST")
             if not time(9,16)<proposed.entry_cutoff<proposed.exit_time<=time(15,30):
                 raise ValueError("Entry cutoff must follow 09:16 and precede the 15:30 exit limit")
             if (not 1<=proposed.max_long<=5 or not 1<=proposed.max_short<=5 or
@@ -627,15 +630,20 @@ class LiveSupervisor:
         LOG.warning("%s",reason)
 
     def _manage_authorized_exits(self,now):
-        """Square off only durable bot entries after exact broker position reconciliation.
+        """Cancel working bot entries at cutoff and close confirmed fills at EOD.
 
-        A process restart clears the in-memory arm flag; the persisted entry intent
-        plus matching live position is sufficient authorization for EOD recovery.
+        A persisted bot entry is sufficient to recover these operations after a restart.
+        Square-off also requires an exact match against the live broker position.
         """
-        if (not self.allowed or now.time()<self.policy.exit_time or now.weekday()>=5):
+        if not self.allowed or now.time()<self.policy.entry_cutoff or now.weekday()>=5:
             return
+        square_off=now.time()>=self.policy.exit_time
         if self.armed:
-            self.disarm("End-of-day square-off started")
+            self.disarm("End-of-day square-off started" if square_off else "Entry cutoff reached")
+        if not square_off and self.runtime:
+            if self.broker is not None:
+                self.runtime.cancel_working_entries(now)
+            return
         intent_rows=self.ledger.snapshot(now.date())
         exited={r["symbol"]:r["filled_quantity"] for r in intent_rows if r["phase"]=="EXIT"}
         entries=[r for r in intent_rows if r["phase"]=="ENTRY" and (
@@ -643,9 +651,10 @@ class LiveSupervisor:
             r["state"] in {"SUBMISSION_UNKNOWN","ACKNOWLEDGED","PARTIAL","CANCEL_PENDING"})]
         if not entries or self.broker is None:
             return
+        if not square_off and not any(row["state"] in {"SUBMISSION_UNKNOWN","ACKNOWLEDGED","PARTIAL"} for row in entries):
+            return
         if self.runtime is None:
-            # Recover a close-only runtime from persisted bot intents. Dummy Dhan
-            # IDs/ORB values are inert because enabled=False and EOD calls exit_due.
+            # Recovery never uses these inert Dhan IDs or ORB values for entries.
             rows=entries
             symbols=[r["symbol"] for r in rows]
             kotak={s:lookup_kotak_equity(self.broker,s) for s in symbols}
@@ -655,7 +664,10 @@ class LiveSupervisor:
                 opening_ranges={s:(Decimal("1"),Decimal("1")) for s in symbols},
                 policy=self.policy,ledger=self.ledger,broker=self.broker,enabled=False,
                 clock=self.clock,close_only=True)
-        self.runtime.exit_due(now, read_positions=lambda: broker_view.positions(self.broker))
+        if square_off:
+            self.runtime.exit_due(now, read_positions=lambda: broker_view.positions(self.broker))
+        else:
+            self.runtime.cancel_working_entries(now)
 
     def cycle(self):
         now=self.now()
@@ -681,7 +693,7 @@ class LiveSupervisor:
                 self.status="NEEDS_KOTAK_CREDENTIALS"
         elif self.broker is None:
             self.broker=self.kotak_factory()
-        self._manage_authorized_exits(now)
+        self._manage_authorized_exits(self.now())
         self._ensure_dhan_auth()
         # Off-session signals may arrive at any time and are mapped for the
         # dashboard. No ORB/feed starts outside the entry window.
@@ -766,7 +778,7 @@ class LiveSupervisor:
                 self.disarm("Live supervisor safety halt")
                 LOG.exception("Supervisor error; new orders disarmed")
             now = self.now()
-            boundaries=(FEED_WARMUP, WATCHLIST_LOCK, START, self.policy.exit_time)
+            boundaries=(FEED_WARMUP, WATCHLIST_LOCK, START, self.policy.entry_cutoff, self.policy.exit_time)
             waits=[(datetime.combine(now.date(), at, tzinfo=IST)-now).total_seconds()
                    for at in boundaries if at>now.time()]
             self.stop_event.wait(min([3, *waits]))

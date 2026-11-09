@@ -1,6 +1,6 @@
 """ORB and Kotak request boundaries for the sole live execution path."""
 import unittest
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -34,6 +34,17 @@ class LiveBoundaryTests(unittest.TestCase):
                            price=Decimal("102.05"), **decision), 0)
         self.assertIsNone(candidate_entry(previous_price=Decimal("102.01"),
                                           price=Decimal("102.05"), **decision))
+
+    def test_legacy_cutoff_cannot_allow_a_cross_at_or_after_0930(self):
+        cutoff = datetime(2026, 11, 5, 9, 30, tzinfo=IST)
+        policy = LivePolicy(time(15), time(15, 15), 5, 5, 10,
+                            Decimal("100000"), Decimal("1000000"), "end")
+        decision = dict(side="LONG", orb_high=Decimal("100"), orb_low=Decimal("95"),
+                        previous_price=Decimal("100"), price=Decimal("101"), policy=policy)
+        self.assertEqual(policy.entry_cutoff, time(9, 30))
+        self.assertGreater(candidate_entry(tick_at=cutoff-timedelta(microseconds=1), **decision), 0)
+        self.assertIsNone(candidate_entry(tick_at=cutoff, **decision))
+        self.assertIsNone(candidate_entry(tick_at=cutoff+timedelta(seconds=1), **decision))
 
     def test_kotak_order_boundary_requires_exact_mapped_instrument(self):
         class Client:

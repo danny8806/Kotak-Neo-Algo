@@ -155,14 +155,17 @@ class LiveTerminalTests(unittest.TestCase):
         self.login()
         headers={"Origin":"http://testserver"}
         payload={"per_position":"50000","max_positions":"10","gross_cap":"500000",
-                 "max_long":"5","max_short":"5","entry_cutoff":"10:00","exit_time":"15:15"}
+                 "max_long":"5","max_short":"5","entry_cutoff":"09:30","exit_time":"15:15"}
         response=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(response.json()["strategy"]["max_positions"],10)
         self.assertEqual(self.supervisor.ledger.read_settings()["per_position"],"50000")
         over_cap=self.client.post("/api/live/settings",headers=headers,json={**payload,"max_long":"6"})
         self.assertEqual(over_cap.status_code,400)
-        bad=self.client.post("/api/live/settings",headers=headers,json={**payload,"exit_time":"09:50"})
+        late=self.client.post("/api/live/settings",headers=headers,json={**payload,"entry_cutoff":"09:31"})
+        self.assertEqual(late.status_code,400)
+        self.assertEqual(self.supervisor.ledger.read_settings()["entry_cutoff"],"09:30:00")
+        bad=self.client.post("/api/live/settings",headers=headers,json={**payload,"exit_time":"09:25"})
         self.assertEqual(bad.status_code,400)
         self.supervisor.armed=True
         locked=self.client.post("/api/live/settings",headers=headers,json=payload)

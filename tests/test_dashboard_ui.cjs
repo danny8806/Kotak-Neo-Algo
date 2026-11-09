@@ -17,7 +17,7 @@ const state={mode:'LIVE_KOTAK_NEO_ONLY',server_time:new Date(marketTime).toISOSt
  pnl:{gross_realized:50,gross_unrealized:25,gross_total:75,net_after_fees:null},broker_books_updated_at:new Date(marketTime).toISOString(),
  armed:false,readiness:false,orders_permitted_by_server:false,dhan_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},kotak_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},
  supervisor_status:'DISARMED',blocked_stage:'SERVER_ORDERS_DISABLED',readiness_blockers:['SERVER_ORDERS_DISABLED'],market_feed:{state:'CONNECTED'},
- strategy:{allocation_per_position:100000,max_positions:10,gross_cap:1000000,max_long:5,max_short:5,entry_cutoff:'10:00',exit_time:'15:15'},
+ strategy:{allocation_per_position:100000,max_positions:10,gross_cap:1000000,max_long:5,max_short:5,entry_cutoff:'09:30',exit_time:'15:15'},
  instrument_mappings:[{symbol:'TESTA',dhan_security_id:'123',kotak_trading_symbol:'TESTA-EQ',kotak_token:'456',status:'READY'},{symbol:'TESTB',dhan_security_id:'124',kotak_trading_symbol:'TESTB-EQ',kotak_token:'457',status:'READY'}],
  orb_monitor:{state:'MONITORING',order_submission_enabled:false,opening_ranges:[{symbol:'TESTA',high:100,low:95},{symbol:'TESTB',high:101,low:96}],breakouts:[]},intents:[],runtime_errors:[]};
 function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOString();}
@@ -44,7 +44,7 @@ function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOSt
   assert.equal(await page.locator('#noticeTitle').textContent(),'Live entries blocked');
   assert.match(await page.locator('#noticeDetail').textContent(),/Server order permission is off/);
   assert.equal(await page.locator('#noticeAction').getAttribute('href'),'#settings');
-  assert.equal(await page.locator('#sessionCutoff').textContent(),'10:00');
+  assert.equal(await page.locator('#sessionCutoff').textContent(),'09:30');
   assert.equal(await page.locator('#squareOffTime').textContent(),'15:15');
   assert.equal(await page.locator('#bookFreshness').textContent(),'Current');
   assert.equal(await page.locator('#tickFreshness').textContent(),'Current');

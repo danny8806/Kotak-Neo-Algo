@@ -11,6 +11,9 @@ from pathlib import Path
 from live_desk.dhan_data import IST
 
 
+LATEST_ENTRY_CUTOFF = time(9, 30)
+
+
 @dataclass(frozen=True)
 class LivePolicy:
     entry_cutoff: time
@@ -21,6 +24,11 @@ class LivePolicy:
     per_position: Decimal
     gross_cap: Decimal
     timestamp_mode: str | None
+
+    def __post_init__(self):
+        # Older persisted settings must not widen the entry window.
+        if self.entry_cutoff > LATEST_ENTRY_CUTOFF:
+            object.__setattr__(self, "entry_cutoff", LATEST_ENTRY_CUTOFF)
 
 
 def load_policy(path: Path) -> LivePolicy:

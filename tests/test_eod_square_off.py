@@ -1,5 +1,6 @@
 """Regression tests for EOD decisions with simulated Kotak books."""
-from datetime import datetime
+from concurrent.futures import Future
+from datetime import datetime, time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -22,7 +23,7 @@ class SquareOffTests(unittest.TestCase):
         desk = object.__new__(LiveSupervisor)
         desk.allowed = True
         desk.armed = False
-        desk.policy = SimpleNamespace(exit_time=AT.time())
+        desk.policy = SimpleNamespace(entry_cutoff=time(9, 30), exit_time=AT.time())
         desk.broker = Mock()
         desk.ledger = Mock()
         desk.ledger.snapshot.return_value = [entry("TCS", "ACKNOWLEDGED", 0)]
@@ -57,10 +58,14 @@ class SquareOffTests(unittest.TestCase):
                 for i, row in enumerate(initial)
             },
             opening_ranges={row["symbol"]: (100, 90) for row in initial},
-            policy=SimpleNamespace(timestamp_mode="end", exit_time=AT.time()),
+            policy=SimpleNamespace(timestamp_mode="end", entry_cutoff=time(9, 30), exit_time=AT.time()),
             ledger=ledger, broker=broker, enabled=True,
         )
         self.addCleanup(runtime.close)
+        # An independent order awaiting a broker reply cannot stall these exits.
+        in_flight=Future()
+        runtime.pending.add(in_flight)
+        self.addCleanup(in_flight.set_result,None)
         with patch.object(runtime, "reconcile_pending"), \
                 patch("live_desk.runtime.cancel_kotak_order") as cancel, \
                 patch("live_desk.runtime.reconcile_kotak_tag"):

@@ -256,20 +256,10 @@ class LiveRuntime:
         if at.astimezone(IST).date() != self.session_date or at.astimezone(IST).time() < self.policy.exit_time:
             return []
         self.enabled = False
-        if not self.wait_for_submissions(timeout=30.0):
-            self._error("EOD_PENDING","EOD exit blocked: Kotak submissions still in flight")
-            return []
-        self._clear_error("EOD_PENDING")
+        # Each symbol must have a terminal entry and exact broker quantity.
+        # An in-flight order on another symbol cannot delay a confirmed exit.
         self.reconcile_pending(at)
-        # Cancel any still-open entry order once, then require a terminal broker
-        # report before closing its actually filled quantity.
-        working_entries = [
-            row for row in self.ledger.snapshot(self.session_date)
-            if row["phase"] == "ENTRY" and row["state"] in {"ACKNOWLEDGED", "PARTIAL"}
-        ]
-        if working_entries:
-            # Independent cancellations share the existing broker rate limiter.
-            list(self.submissions.map(self._cancel_entry, working_entries, repeat(at)))
+        self.cancel_working_entries(at)
         rows = self.ledger.snapshot(self.session_date)
         exits = {row["symbol"]: row for row in rows if row["phase"] == "EXIT"}
         candidates = []
@@ -316,6 +306,19 @@ class LiveRuntime:
             except Exception:
                 results.append({"state":"SUBMISSION_UNKNOWN"})
         return results
+
+    def cancel_working_entries(self, at: datetime) -> None:
+        local = at.astimezone(IST)
+        if local.date() != self.session_date or local.time() < self.policy.entry_cutoff:
+            return
+        self.enabled = False
+        # A durable transition prevents a second cancellation after a timeout.
+        working_entries = [
+            row for row in self.ledger.snapshot(self.session_date)
+            if row["phase"] == "ENTRY" and row["state"] in {"ACKNOWLEDGED", "PARTIAL"}
+        ]
+        if working_entries:
+            list(self.submissions.map(self._cancel_entry, working_entries, repeat(at)))
 
     def _cancel_entry(self, row: dict, at: datetime) -> None:
         tag = row["tag"]

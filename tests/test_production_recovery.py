@@ -316,6 +316,61 @@ class ProductionReplayTests(unittest.TestCase):
         self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"], "ABORTED")
         self.assertEqual(runtime.errors, [])
 
+    def test_cutoff_during_broker_pacing_aborts_before_sdk_dispatch(self):
+        broker=ReplayExchange()
+        session=KotakSession(lambda:broker,clock=lambda:NOW)
+        self.assertTrue(session.ensure_authenticated())
+        runtime=self.runtime(session)
+        before=NOW.replace(minute=29,second=59)
+        cutoff=before+timedelta(seconds=1)
+        clock=[before]
+        runtime.clock=lambda:clock[0]
+
+        def pace():
+            clock[0]=cutoff
+
+        with patch.object(session.order_limiter,"acquire",side_effect=pace):
+            runtime.on_tick({"symbol":"TESTA","ltp":"100","timestamp":before})
+            self.assertIsNotNone(runtime.on_tick({"symbol":"TESTA","ltp":"101","timestamp":before}))
+            self.assertTrue(runtime.wait_for_submissions())
+        self.assertEqual(broker.calls,[])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"],"ABORTED")
+
+    def test_cutoff_cancels_once_then_eod_exits_late_confirmed_partial_fill(self):
+        broker=ReplayExchange()
+        runtime=self.runtime(broker)
+        intent=self.reserve()
+        tag=intent["tag"]
+        self.ledger.mark_submission_unknown(tag,NOW)
+        self.ledger.apply_broker_report(self.report(tag),NOW)
+        cutoff=NOW.replace(minute=30)
+        eod=NOW.replace(hour=15,minute=15)
+        runtime.clock=lambda:eod
+
+        def report(_broker, order_tag):
+            if order_tag==tag:
+                return self.report(tag,status="cancelled",filled_quantity=2,average_fill_price="100")
+            return self.report(order_tag,status="rejected",ordered_quantity=2,broker_order_id="SIM-1")
+
+        read_positions=lambda:[{"symbol":"TESTA","product":"MIS","net_quantity":2}]
+        with patch("live_desk.runtime.cancel_kotak_order",side_effect=TimeoutError) as cancel, \
+             patch("live_desk.runtime.reconcile_kotak_tag",side_effect=report):
+            runtime.cancel_working_entries(cutoff-timedelta(seconds=1))
+            cancel.assert_not_called()
+            runtime.cancel_working_entries(cutoff)
+            runtime.cancel_working_entries(cutoff)
+            self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"],"CANCEL_PENDING")
+            self.assertEqual(broker.calls,[])
+            cancel.assert_called_once_with(broker,"OID")
+            self.assertEqual(len(runtime.exit_due(eod,read_positions=read_positions)),1)
+            self.assertEqual(runtime.exit_due(eod,read_positions=read_positions),[])
+        entry, exit_order=self.ledger.snapshot(NOW.date())
+        self.assertEqual((entry["state"],entry["filled_quantity"]),("PARTIAL_CANCELLED",2))
+        self.assertEqual((exit_order["state"],exit_order["quantity"]),("REJECTED",2))
+        self.assertEqual(len(broker.calls),1)
+        self.assertEqual(broker.calls[0]["transaction_type"],"S")
+        self.assertTrue(any("shares remaining" in error for error in runtime.errors))
+
     def test_twenty_duplicate_binary_ticks_submit_exactly_one_market_order(self):
         broker=ReplayExchange();broker.filled=True;runtime=self.runtime(broker)
         runtime.on_tick({'symbol':'TESTA','ltp':'100','timestamp':NOW})
