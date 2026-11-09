@@ -16,6 +16,10 @@ class KotakSessionUnavailable(RuntimeError):
     """No request was sent: the session is refreshing or unavailable."""
 
 
+class KotakEntryNotSent(RuntimeError):
+    """The entry guard failed after rate limiting, before calling the SDK."""
+
+
 class KotakSession:
     def __init__(self, factory, *, clock=None):
         self.factory = factory
@@ -87,27 +91,32 @@ class KotakSession:
                 self.status.update(state="AUTH_EXPIRED", error="Broker session rejected",
                                    next_attempt=self._next_attempt.isoformat())
 
+    def _call(self, name, args, kwargs, *, before_send=None):
+        limiter = self.order_limiter if name in {"place_order", "cancel_order"} else self.read_limiter
+        limiter.acquire()
+        with self.lock:
+            client = self._client
+        if client is None:
+            raise KotakSessionUnavailable("Kotak authentication unavailable; request not sent")
+        if before_send is not None and not before_send():
+            raise KotakEntryNotSent("Entry authorization or tick freshness expired before dispatch")
+        try:
+            result = getattr(client, name)(*args, **kwargs)
+        except Exception as exc:
+            response = getattr(exc, "response", None)
+            if getattr(response, "status_code", None) in {401, 403}:
+                self._invalidate(client)
+            raise
+        if authentication_rejected(result):
+            self._invalidate(client)
+            raise RuntimeError("Kotak authentication rejected; request outcome requires reconciliation")
+        return result
+
+    def place_order(self, *args, before_send=None, **kwargs):
+        return self._call("place_order", args, kwargs, before_send=before_send)
+
     def __getattr__(self, name):
         if name not in {"positions", "order_report", "trade_report", "limits",
-                        "search_scrip", "place_order", "cancel_order"}:
+                        "search_scrip", "cancel_order"}:
             raise AttributeError(name)
-
-        def call(*args, **kwargs):
-            limiter=self.order_limiter if name in {"place_order","cancel_order"} else self.read_limiter
-            limiter.acquire()
-            with self.lock:
-                client = self._client
-            if client is None:
-                raise KotakSessionUnavailable("Kotak authentication unavailable; request not sent")
-            try:
-                result = getattr(client, name)(*args, **kwargs)
-            except Exception as exc:
-                response = getattr(exc, "response", None)
-                if getattr(response, "status_code", None) in {401, 403}:
-                    self._invalidate(client)
-                raise
-            if authentication_rejected(result):
-                self._invalidate(client)
-                raise RuntimeError("Kotak authentication rejected; request outcome requires reconciliation")
-            return result
-        return call
+        return lambda *args, **kwargs: self._call(name, args, kwargs)

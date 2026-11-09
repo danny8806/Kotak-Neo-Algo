@@ -47,18 +47,19 @@ def login_kotak(credentials: KotakCredentials, *, client=None):
 
 
 def place_kotak_order(client, instrument: KotakInstrument, side: str,
-                      quantity: int, tag: str) -> dict:
+                      quantity: int, tag: str, *, before_send=None) -> dict:
     """Send once. An exception or missing order ID is ambiguous, never retried here."""
     if side not in {"BUY", "SELL"} or type(quantity) is not int or quantity <= 0:
         raise ValueError("Invalid Kotak order direction or quantity")
     if (not tag or instrument.trading_symbol != f"{instrument.symbol}-EQ" or
             not instrument.symbol or not instrument.token.isdecimal()):
         raise ValueError("Exact Kotak instrument mapping and unique tag required")
+    guard = {"before_send": before_send} if before_send is not None else {}
     response = client.place_order(exchange_segment="nse_cm", product="MIS", price="0",
                                   order_type="MKT", quantity=str(quantity), validity="DAY",
                                   trading_symbol=instrument.trading_symbol,
                                   transaction_type="B" if side == "BUY" else "S",
-                                  amo="NO", tag=tag)
+                                  amo="NO", tag=tag, **guard)
     if (not isinstance(response, dict) or str(response.get("stat", "")).lower() != "ok" or
             not str(response.get("nOrdNo") or "").strip()):
         raise RuntimeError("Kotak order submission was not acknowledged; reconcile before retry")

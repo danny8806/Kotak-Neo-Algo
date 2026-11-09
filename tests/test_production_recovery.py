@@ -291,6 +291,31 @@ class ProductionReplayTests(unittest.TestCase):
         self.assertEqual(runtime._submit_and_reconcile(intent,NOW)['state'],'ABORTED')
         self.assertEqual(runtime.broker.calls,[])
 
+    def test_disarm_during_broker_pacing_aborts_before_sdk_dispatch(self):
+        broker = ReplayExchange()
+        session = KotakSession(lambda: broker, clock=lambda: NOW)
+        self.assertTrue(session.ensure_authenticated())
+        runtime = self.runtime(session)
+        entered, release = threading.Event(), threading.Event()
+
+        def pace():
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("Test did not release the rate limiter")
+
+        with patch.object(session.order_limiter, "acquire", side_effect=pace):
+            try:
+                self.cross(runtime)
+                self.assertTrue(entered.wait(2))
+                runtime.enabled = False
+            finally:
+                release.set()
+            self.assertTrue(runtime.wait_for_submissions())
+
+        self.assertEqual(broker.calls, [])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"], "ABORTED")
+        self.assertEqual(runtime.errors, [])
+
     def test_twenty_duplicate_binary_ticks_submit_exactly_one_market_order(self):
         broker=ReplayExchange();broker.filled=True;runtime=self.runtime(broker)
         runtime.on_tick({'symbol':'TESTA','ltp':'100','timestamp':NOW})

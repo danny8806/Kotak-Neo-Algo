@@ -15,6 +15,7 @@ from decimal import Decimal
 from itertools import repeat
 
 from live_desk.dhan_data import IST
+from live_desk.kotak_auth import KotakEntryNotSent, KotakSession
 from live_desk.kotak_gateway import cancel_kotak_order, place_kotak_order, reconcile_kotak_tag
 from live_desk.kotak_instruments import KotakInstrument
 from live_desk.kotak_response import book_rows
@@ -198,8 +199,14 @@ class LiveRuntime:
             return {"tag": tag, "state": "ABORTED"}
         result=None
         try:
+            guard = {"before_send": lambda: self._entry_may_send(at)} if (
+                is_entry and isinstance(self.broker, KotakSession)
+            ) else {}
             result = place_kotak_order(self.broker, self.kotak_instruments[intent["symbol"]],
-                                       intent["side"], intent["quantity"], tag)
+                                       intent["side"], intent["quantity"], tag, **guard)
+        except KotakEntryNotSent:
+            self.ledger.mark_not_submitted(tag, self.clock(), committed_for_send=True)
+            return {"tag": tag, "state": "ABORTED"}
         except Exception as exc:
             # Even a timeout can follow broker acceptance. Only retry READS.
             self._error(tag,f"{intent['symbol']}: {type(exc).__name__}; reconcile tag {tag}")

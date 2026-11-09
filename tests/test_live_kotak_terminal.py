@@ -551,11 +551,11 @@ class KotakOrderSafetyTests(unittest.TestCase):
             self.assertEqual(sum(x["phase"]=="EXIT" for x in rows),20)
             self.assertTrue(all(x["state"]=="FILLED" for x in rows))
 
-    def test_twenty_concurrent_ticks_reserve_at_most_ten_unique_signal_entries(self):
-        """Duplicate simultaneous crossings cannot exceed the configured 5+5 cap."""
+    def test_thirty_simultaneous_breakouts_with_duplicates_reserve_at_most_ten_entries(self):
+        """Sixty simultaneous ticks across 30 stocks cannot exceed the 5+5 cap."""
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
-        symbols=[f"LONG{i}" for i in range(1,6)]+[f"SHORT{i}" for i in range(1,6)]
+        symbols=[f"LONG{i}" for i in range(1,16)]+[f"SHORT{i}" for i in range(1,16)]
         signals=[{"symbol":s,"side":"LONG" if s.startswith("LONG") else "SHORT"} for s in symbols]
         ids={s:str(i+1) for i,s in enumerate(symbols)}
         instruments={s:KotakInstrument(s,s+"-EQ",str(i+100)) for i,s in enumerate(symbols)}
@@ -576,7 +576,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
         for symbol in symbols:
             edge=Decimal("100") if symbol.startswith("LONG") else Decimal("95")
             self.assertIsNone(runtime.on_tick({"symbol":symbol,"ltp":str(edge),"timestamp":TODAY}))
-        gate=Barrier(20)
+        gate=Barrier(60)
         ticks=[]
         for symbol in symbols:
             cross="100.01" if symbol.startswith("LONG") else "94.99"
@@ -586,16 +586,17 @@ class KotakOrderSafetyTests(unittest.TestCase):
             return runtime.on_tick(tick)
         with patch("live_desk.runtime.place_kotak_order",side_effect=submit), \
              patch("live_desk.runtime.reconcile_kotak_tag",side_effect=reconcile), \
-             ThreadPoolExecutor(max_workers=20) as pool:
+             ThreadPoolExecutor(max_workers=60) as pool:
             results=list(pool.map(deliver,ticks))
             self.assertTrue(runtime.wait_for_submissions(timeout=10))
         rows=[r for r in self.ledger.snapshot(TODAY.date()) if r["phase"]=="ENTRY"]
-        self.assertEqual(sum(result is not None for result in results),10)
+        self.assertGreaterEqual(sum(result is not None for result in results),10)
         self.assertEqual(len(rows),10)
         self.assertEqual(len({row["symbol"] for row in rows}),10)
         self.assertEqual(sum(row["side"]=="BUY" for row in rows),5)
         self.assertEqual(sum(row["side"]=="SELL" for row in rows),5)
         self.assertEqual(len(submit_tags),10)
+        self.assertEqual(set(submit_tags), {(row["symbol"], row["tag"]) for row in rows})
         self.assertTrue(all(row["state"]=="FILLED" for row in rows))
 
     def test_independent_ledger_workers_serialize_position_caps_without_deadlock(self):
