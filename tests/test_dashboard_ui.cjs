@@ -1,22 +1,26 @@
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
 const fs=require('node:fs'),http=require('node:http'),assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
 const root=path.resolve(__dirname,'../live_desk/static');
+const screenshotDir=process.env.DASHBOARD_SCREENSHOT_DIR||os.tmpdir();
+const marketTime=Date.parse('2026-11-05T09:18:00+05:30');
 let revision=0,healthFailure=false;const mutations=[];
 const journal={as_of:new Date().toISOString(),real_only:true,summary:{trade_count:1,closed_trade_count:1,open_trade_count:0,gross_realized_from_exits:25,gross_loss_total:0,closed_trade_return_pct:5,max_closed_trade_drawdown_gross:0,wins:1,losses:0,win_rate_pct:100,average_win:25,average_loss:null,net_after_fees:null,fees_status:'NOT AVAILABLE FROM CONFIRMED BROKER DATA',method:'Matched Kotak-confirmed entry and exit fills; descriptive only'},trades:[{session_date:'2026-11-05',symbol:'TESTA',direction:'LONG',status:'CLOSED',entry_quantity:5,exit_quantity:5,entry_average_price:100,exit_average_price:105,realized_gross:25}],events:[{observed_at:new Date().toISOString(),symbol:'TESTA',phase:'ENTRY',side:'BUY',state:'FILLED',details:'Kotak FILLED; filled 5/5'}],fills:[{first_seen_at:new Date().toISOString(),trading_symbol:'TESTA-EQ',side:'B',quantity:5,price:100,broker_fill_id:'F-TEST',broker_order_id:'O-TEST'}]};
 function nginxRewrite(value){return value.toString().replaceAll('"/api/','"/kotak-live/api/').replaceAll('"/static/','"/kotak-live/static/').replaceAll('"/health','"/kotak-live/health').replaceAll('"/ready','"/kotak-live/ready').replaceAll('"/login','"/kotak-live/login').replaceAll('"/ws','"/kotak-live/ws').replaceAll('"/"','"/kotak-live/"');}
-const state={mode:'LIVE_KOTAK_NEO_ONLY',server_time:new Date().toISOString(),session_date:'2026-11-05',
- signal_status:'READY',signals:[{symbol:'TESTA',side:'LONG',rank:1,news_summary:'Synthetic research fixture A',reason:'Test evidence for the isolated UI runner.',first_available_at:'2026-11-05T08:00:00+05:30',sources:[{url:'https://www.nseindia.com/',title:'Test reference',published_at:'2026-11-05T08:00:00+05:30'}]},{symbol:'TESTB',side:'SHORT',rank:1,news_summary:'Synthetic research fixture B',reason:'Second isolated test candidate.',sources:[]}],
+const state={mode:'LIVE_KOTAK_NEO_ONLY',server_time:new Date(marketTime).toISOString(),session_date:'2026-11-05',
+ watchlist_locked:true,watchlist_eligible:true,closed_trades:[],
+ signal_status:'READY',signals:[{symbol:'TESTA',entry_eligible:true,side:'LONG',rank:1,news_summary:'Synthetic research fixture A',reason:'Test evidence for the isolated UI runner.',first_available_at:'2026-11-05T08:00:00+05:30',sources:[{url:'https://www.nseindia.com/',title:'Test reference',published_at:'2026-11-05T08:00:00+05:30'}]},{symbol:'TESTB',entry_eligible:true,side:'SHORT',rank:1,news_summary:'Synthetic research fixture B',reason:'Second isolated test candidate.',sources:[]}],
  positions:[{symbol:'TESTA',side:'LONG',net_quantity:5,ltp:105,realized_gross:50,unrealized_gross:25,gross_mark_to_market:75,pnl_status:'LIVE'}],
  orders:Array.from({length:151},(_,i)=>({broker_order_id:'TEST-'+i,symbol:i%2?'TESTB':'TESTA',side:'BUY',order_quantity:'1',status:'complete',tag:i===150?'=test-formula':'test-tag'})),
  fills:Array.from({length:151},(_,i)=>({fill_id:'TEST-FILL-'+i,symbol:'TESTA',filled_quantity:'1',fill_price:100})),
  quotes:{TESTA:{fresh:true,ltp:105,open:100},TESTB:{fresh:true,ltp:95,open:100}},broker_connected:true,available_cash:'1000000',
- pnl:{gross_realized:50,gross_unrealized:25,gross_total:75,net_after_fees:null},broker_books_updated_at:new Date().toISOString(),
+ last_entry_quote_at:new Date(marketTime-1000).toISOString(),
+ pnl:{gross_realized:50,gross_unrealized:25,gross_total:75,net_after_fees:null},broker_books_updated_at:new Date(marketTime).toISOString(),
  armed:false,readiness:false,orders_permitted_by_server:false,dhan_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},kotak_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},
  supervisor_status:'DISARMED',blocked_stage:'SERVER_ORDERS_DISABLED',readiness_blockers:['SERVER_ORDERS_DISABLED'],market_feed:{state:'CONNECTED'},
  strategy:{allocation_per_position:100000,max_positions:10,gross_cap:1000000,max_long:5,max_short:5,entry_cutoff:'10:00',exit_time:'15:15'},
  instrument_mappings:[{symbol:'TESTA',dhan_security_id:'123',kotak_trading_symbol:'TESTA-EQ',kotak_token:'456',status:'READY'},{symbol:'TESTB',dhan_security_id:'124',kotak_trading_symbol:'TESTB-EQ',kotak_token:'457',status:'READY'}],
  orb_monitor:{state:'MONITORING',order_submission_enabled:false,opening_ranges:[{symbol:'TESTA',high:100,low:95},{symbol:'TESTB',high:101,low:96}],breakouts:[]},intents:[],runtime_errors:[]};
-function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOString();}
+function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOString();}
 (async()=>{
  const server=http.createServer((req,res)=>{
   const requestPath=(req.url||'/').replace(/^\/kotak-live(?=\/|$)/,'')||'/';
@@ -30,6 +34,7 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
  await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
  try{
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{})});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('requestfailed',r=>console.log('request_failed',r.url(),r.failure()?.errorText));
+  await page.clock.setFixedTime(marketTime);
   await page.addInitScript(()=>{window.WebSocket=class {static OPEN=1;static CONNECTING=0;constructor(){this.readyState=1;window._testSocket=this;}close(){this.readyState=3;}};});
   const origin='http://127.0.0.1:'+server.address().port;const loginPage=await browser.newPage();await loginPage.goto(origin+'/kotak-live/login');await loginPage.locator('#password').fill('Synthetic-test-password');await loginPage.locator('button.primary').click();await loginPage.waitForURL('**/kotak-live/');await loginPage.close();
   await page.goto(origin+'/kotak-live/');await page.waitForFunction(()=>document.getElementById('mtm').textContent==='₹75.00');
@@ -42,12 +47,22 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   assert.equal(await page.locator('#sessionCutoff').textContent(),'10:00');
   assert.equal(await page.locator('#squareOffTime').textContent(),'15:15');
   assert.equal(await page.locator('#bookFreshness').textContent(),'Current');
-  assert.equal(await page.locator('#tickFreshness').textContent(),'Unavailable');
+  assert.equal(await page.locator('#tickFreshness').textContent(),'Current');
+  assert.equal(await page.locator('#workflowWatchlist').textContent(),'2 locked');
+  assert.equal(await page.locator('#workflowRange').textContent(),'2 verified');
+  assert.equal(await page.locator('#workflowEntries').textContent(),'Blocked');
+  assert.equal(await page.locator('#workflowExit').textContent(),'0 confirmed');
+  assert.equal(await page.locator('#gateProgress').evaluate(n=>n.value),13);
   assert.match(await page.locator('#overviewGates .gate-row').first().textContent(),/Server order permission.*Blocked/);
   assert.equal(await page.evaluate(()=>document.body.scrollHeight<=innerHeight+1),true,'The workspace must not become a long document');
-  assert.equal(await page.locator('#view-overview').evaluate(n=>n.scrollHeight<=n.clientHeight+1),true,'Desktop overview should fit without scrolling');
+  const overviewSize=await page.locator('#view-overview').evaluate(n=>({height:n.clientHeight,content:n.scrollHeight}));
+  assert.ok(overviewSize.content<=overviewSize.height+1,`Desktop overview height ${overviewSize.content}px exceeds ${overviewSize.height}px`);
   for(const selector of ['.pnl-panel','.readiness-panel'])assert.equal(await page.locator(selector).evaluate(n=>n.scrollHeight<=n.clientHeight+1),true,'Overview cards must not clip their contents');
-  await page.screenshot({path:path.join(os.tmpdir(),'kotak-dashboard-isolated-test-desktop.png'),fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'kotak-dashboard-preview-desktop.png'),fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:1280,height:720});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.locator('#overviewConnections').scrollIntoViewIfNeeded();
+  await page.setViewportSize({width:1440,height:1000});
   await go('signals');assert.equal(await page.locator('#signalBody tr').count(),2);
   await page.locator('#signalSearch').fill('TESTB');assert.equal(await page.locator('#signalBody tr').count(),1);await page.locator('#signalBody button').click();assert.match(await page.locator('#evidence').textContent(),/fixture B/);
   await page.locator('#signalSearch').fill('');await page.locator('#signalFilters [data-filter="LONG"]').click();assert.equal(await page.locator('#signalBody tr').count(),1);assert.match(await page.locator('#signalBody').textContent(),/TESTA/);
@@ -71,8 +86,19 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   await go('overview');await go('settings');assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');await page.locator('#resetSettings').click();assert.equal(await page.locator('#settingAllocation').inputValue(),'100000');
   await page.locator('#settingAllocation').fill('125000');await page.locator('#saveSettings').click();await page.waitForFunction(()=>document.getElementById('saveSettings').disabled);assert.equal(state.strategy.allocation_per_position,125000);
   state.armed=true;await push();assert.equal(await page.locator('#settingAllocation').isDisabled(),true);assert.equal(await page.locator('#saveSettings').isDisabled(),true);state.armed=false;await push();assert.equal(await page.locator('#arm').isDisabled(),true);
+  state.readiness_blockers=['FRESH_QUOTES','SERVER_ORDERS_DISABLED'];await push();
+  assert.equal(await page.locator('#tickFreshness').textContent(),'Stale');
   state.orders_permitted_by_server=true;state.readiness=true;state.readiness_blockers=[];await push();
   assert.equal(await page.locator('#noticeTitle').textContent(),'Ready to arm');
+  assert.equal(await page.locator('#workflowEntries').textContent(),'Ready to arm');
+  await page.evaluate(()=>window._testSocket.onmessage({data:'{invalid'}));
+  assert.equal(await page.locator('#risk').textContent(),'UNKNOWN');
+  assert.equal(await page.locator('#workflowEntries').textContent(),'Unavailable');
+  assert.equal(await page.locator('#gateProgress').getAttribute('value'),null);
+  assert.match(await page.locator('#overviewGates').textContent(),/Waiting for live status/);
+  assert.equal(await page.locator('#arm').isDisabled(),true);
+  await push();
+  assert.equal(await page.locator('#risk').textContent(),'READY');
   await page.locator('#arm').click();await page.locator('#armModal').waitFor({state:'visible'});
   await page.locator('#authorization').fill('TEST ONLY - DO NOT SUBMIT');await page.locator('#otp').fill('000000');await page.keyboard.press('Escape');
   await page.locator('#armModal').waitFor({state:'hidden'});await page.waitForFunction(()=>document.getElementById('otp').value==='');assert.equal(await page.locator('#otp').inputValue(),'');assert.equal(await page.locator('#authorization').inputValue(),'');
@@ -81,7 +107,8 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   healthFailure=true;await page.locator('#runChecks').click();await page.waitForFunction(()=>document.querySelectorAll('#checkResults .negative').length===1);healthFailure=false;
   await go('overview');await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Mobile page overflows');
   await page.waitForFunction(()=>document.getElementById('sidebar').getBoundingClientRect().right<=0);await page.locator('#toast').waitFor({state:'hidden'});
-  await page.screenshot({path:path.join(os.tmpdir(),'kotak-dashboard-isolated-test-mobile.png'),fullPage:true,animations:'disabled'});
+  await page.locator('#view-overview').evaluate(n=>{n.scrollTop=0;});
+  await page.screenshot({path:path.join(screenshotDir,'kotak-dashboard-preview-mobile.png'),fullPage:true,animations:'disabled'});
   await page.locator('#menuToggle').click();assert.equal(await page.locator('#menuToggle').getAttribute('aria-expanded'),'true');await go('orders');assert.equal(await page.locator('#menuToggle').getAttribute('aria-expanded'),'false');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.reload();await page.waitForFunction(()=>document.getElementById('view-orders').hidden===false);await page.waitForFunction(()=>document.getElementById('connection').textContent==='KOTAK CONNECTED');
   await page.evaluate(()=>window._testSocket.onmessage({data:'{invalid'}));for(const id of ['funds','posCount','mtm','realizedPnl','unrealizedPnl','netPnl'])assert.equal(await page.locator('#'+id).textContent(),'—');assert.equal(await page.locator('#arm').isDisabled(),true);

@@ -25,7 +25,7 @@
 <div class="main-shell">
 <header class="topbar"><div class="breadcrumb"><button class="icon-button mobile-menu" id="menuToggle" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">☰</button><span class="desk-label">Trading workspace</span><span class="breadcrumb-divider">/</span><strong id="viewTitle">Overview</strong></div><div class="topbar-actions"><span id="liveClock" class="clock">— IST</span><span class="pill" id="mode">ORDERS DISARMED</span><button class="quiet-button" id="logout">Sign out <span aria-hidden="true">↗</span></button></div></header>
 <main id="workspace" tabindex="-1">
-<div class="page-heading"><div><p class="eyebrow" id="viewEyebrow">YOUR SESSION AT A GLANCE</p><h1 id="pageTitle">Session overview</h1><p id="pageDescription">A clear view of your account, execution gates, and live connections.</p></div><div class="page-heading-actions"><span class="pill" id="connection">CONNECTING</span><button class="secondary small" id="refreshState" title="Refresh live account state">↻ <span>Refresh</span></button></div></div>
+<div class="page-heading"><div><p class="eyebrow" id="viewEyebrow">YOUR SESSION AT A GLANCE</p><h1 id="pageTitle">Session overview</h1><p id="pageDescription">Track live P&amp;L, the opening workflow, and order readiness.</p></div><div class="page-heading-actions"><span class="pill" id="connection">CONNECTING</span><button class="secondary small" id="refreshState" title="Refresh live account state">↻ <span>Refresh</span></button></div></div>
 <div class="notice session-status" id="notice" data-tone="neutral">
   <div class="session-status-copy" role="status">
     <strong id="noticeTitle">Connecting to the live desk</strong>
@@ -38,22 +38,26 @@
 <div class="overview-metrics">
 <article class="metric hero-metric"><div class="metric-top"><span>Session gross P&amp;L</span><span class="metric-icon">↗</span></div><div class="value" id="mtm">—</div><p>Realized + unrealized · before fees</p><div class="metric-bottom"><span class="tiny-dot"></span>Broker books &amp; fresh exchange prices</div></article>
 <article class="metric"><div class="metric-top"><span>Available broker funds</span><span class="metric-icon">▤</span></div><div class="value" id="funds">—</div><p>Kotak-reported account balance</p><a href="#settings" class="metric-link">Review allocation <span>↗</span></a></article>
-<article class="metric"><div class="metric-top"><span>Open positions</span><span class="metric-icon">▥</span></div><div class="value" id="posCount">—</div><p>Confirmed NSE cash positions</p><a href="#positions" class="metric-link">View positions <span>↗</span></a></article>
+<article class="metric"><div class="metric-top"><span>Open positions</span><span class="metric-icon">▥</span></div><div class="value" id="posCount">—</div><p id="positionOutcome">Confirmed NSE cash positions</p><a href="#positions" class="metric-link">View positions <span>↗</span></a></article>
 <article class="metric"><div class="metric-top"><span>Entry readiness</span><span class="metric-icon">◎</span></div><div class="value status-value" id="risk">CHECKING</div><p id="riskReason">Waiting for live checks</p><a href="#connections" class="metric-link">Inspect prerequisites <span>↗</span></a></article>
 </div>
 <div class="overview-body">
 <article class="panel pnl-panel"><div class="panel-heading"><div><h2>Profit &amp; loss</h2><p>A transparent breakdown of the session</p></div><span class="subtle-tag">GROSS</span></div><div class="pnl-line"><span><i class="legend-dot teal"></i>Realized P&amp;L<small>Matched broker buys and sells</small></span><strong id="realizedPnl">—</strong></div><div class="pnl-line"><span><i class="legend-dot blue"></i>Unrealized P&amp;L<small>Marked against fresh exchange ticks</small></span><strong id="unrealizedPnl">—</strong></div><div class="pnl-line net-line"><span>Net after fees<small>Awaiting authoritative broker charges</small></span><strong id="netPnl">—</strong></div><a href="#positions" class="panel-link">Open positions &amp; valuation details <span>→</span></a></article>
-<article class="panel readiness-panel"><div class="panel-heading"><div><h2>Execution prerequisites</h2><p id="gateSummary">Verifying the session</p></div><span class="pill" id="gate">DISARMED</span></div><div id="overviewGates" class="gate-list"></div><a href="#connections" class="panel-link">View every connection and check <span>→</span></a></article>
+<article class="panel readiness-panel"><div class="panel-heading"><div><h2>Execution prerequisites</h2><p id="gateSummary">Verifying the session</p></div><span class="pill" id="gate">DISARMED</span></div><progress id="gateProgress" class="gate-progress" aria-label="Verified execution checks"></progress><div id="overviewGates" class="gate-list"></div><a href="#connections" class="panel-link">View every connection and check <span>→</span></a></article>
 <article class="panel session-panel">
-  <div class="panel-heading"><div><h2>Session context</h2><p>Exchange time · Asia/Kolkata</p></div><span class="subtle-tag" id="tradingWindow">—</span></div>
-  <div class="session-strip" aria-label="Session timing and data freshness">
-    <div><span>Entry cutoff · IST</span><strong id="sessionCutoff">—</strong><small id="entryWindowState">Waiting for session</small></div>
-    <div><span>Square-off · IST</span><strong id="squareOffTime">—</strong><small>Configured exit time</small></div>
-    <div><span>Kotak account books</span><strong id="bookFreshness">—</strong><small id="bookLastSync">Waiting for sync</small></div>
-    <div><span>Dhan exchange ticks</span><strong id="tickFreshness">—</strong><small id="tickLastTrade">Waiting for feed</small></div>
+  <div class="panel-heading"><div><h2>Opening workflow</h2><p>Watchlist to confirmed exits · IST</p></div><span class="subtle-tag" id="tradingWindow">—</span></div>
+  <ol class="opening-workflow" aria-label="Opening workflow">
+    <li id="stageWatchlist"><a href="#signals"><span>01 · Watchlist</span><strong id="workflowWatchlist">Waiting</strong><small>09:15 lock</small></a></li>
+    <li id="stageRange"><a href="#market"><span>02 · Opening range</span><strong id="workflowRange">Waiting</strong><small>09:15–09:16 candle</small></a></li>
+    <li id="stageEntries"><a href="#settings"><span>03 · Entries</span><strong id="workflowEntries">Waiting</strong><small>Cutoff <span id="sessionCutoff">—</span> IST</small></a></li>
+    <li id="stageExit"><a href="#positions"><span>04 · Exits</span><strong id="workflowExit">Waiting</strong><small>Square-off <span id="squareOffTime">—</span> IST</small></a></li>
+  </ol>
+  <div class="session-strip" aria-label="Broker and feed freshness">
+    <div><span>Kotak books</span><strong id="bookFreshness">—</strong><small id="bookLastSync">Waiting for sync</small></div>
+    <div><span>Dhan entry ticks</span><strong id="tickFreshness">—</strong><small id="tickLastTrade">Waiting for feed</small></div>
   </div>
-  <div class="context-grid"><div><span>Session date</span><strong id="session">—</strong></div><div><span>Research candidates</span><strong id="count">—</strong></div><div><span>India VIX</span><strong id="vix">—</strong></div><div><span>Research state</span><span class="pill" id="source">UNAVAILABLE</span></div></div>
-  <p class="context-note" id="vixAsOf">Dhan index context; not an entry trigger.</p>
+  <div class="session-foot"><span id="session">—</span><span>Research <strong id="count">—</strong></span><span>India VIX <strong id="vix">—</strong></span><span class="pill" id="source">UNAVAILABLE</span></div>
+  <p class="context-note" id="vixAsOf">Dhan index context</p>
 </article>
 <article class="panel connections-overview"><div class="panel-heading"><div><h2>Live connections</h2><p>Authentication and account freshness</p></div><a href="#connections" class="text-button">Details ↗</a></div><div id="overviewConnections" class="connection-list"></div></article>
 </div>

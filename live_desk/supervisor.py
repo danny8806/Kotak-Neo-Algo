@@ -24,7 +24,7 @@ from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
 from live_desk.strategy import load_policy
 from live_desk.orb import opening_range
-from live_desk.runtime import LiveRuntime
+from live_desk.runtime import MAX_ENTRY_TICK_AGE, LiveRuntime
 from live_desk.ticker import LiveTicker
 from live_desk import broker_view
 from live_desk.analytics import build_trade_journal
@@ -392,7 +392,7 @@ class LiveSupervisor:
                 if "tick_at" not in quote:
                     continue
                 tick_at=datetime.fromisoformat(quote["tick_at"])
-                if not timedelta(0)<=received_at-tick_at<=timedelta(seconds=5):
+                if not timedelta(0)<=received_at-tick_at<=MAX_ENTRY_TICK_AGE:
                     continue
                 price=Decimal(str(quote["ltp"]))
                 if symbol not in self.opening_ranges:
@@ -526,7 +526,7 @@ class LiveSupervisor:
             if previous.get("tick_at") and ts.astimezone(IST)<datetime.fromisoformat(previous["tick_at"]):return
             self.quote_data[symbol]={**previous,"ltp":float(value),
                                      "tick_at":ts.astimezone(IST).isoformat()}
-            self.last_quote_at=now
+            self.last_quote_at=max(ts, self.last_quote_at or ts)
             ready=self.armed and self._health_check_locked(now)
             if self.runtime:self.runtime.enabled=ready
             runtime=self.runtime
@@ -587,7 +587,7 @@ class LiveSupervisor:
         if not wanted or set(self.opening_ranges)!=wanted:blocked.append("OPENING_RANGE")
         ticker=self.ticker.snapshot() if self.ticker else {}
         if ticker.get("state")!="CONNECTED" or ticker.get("error"):blocked.append("MARKET_FEED")
-        if self.last_quote_at is None or not timedelta(0)<=now-self.last_quote_at<=PRICE_EXPIRY:
+        if self.last_quote_at is None or not timedelta(0)<=now-self.last_quote_at<=MAX_ENTRY_TICK_AGE:
             blocked.append("FRESH_QUOTES")
         if self.last_book_at is None or not timedelta(0)<=now-self.last_book_at<=BOOK_EXPIRY:
             blocked.append("BROKER_BOOKS")
@@ -835,6 +835,7 @@ class LiveSupervisor:
                 "session_authorized":self.session_authorized,
                 "orders_permitted_by_server":self.allowed,
                 "market_feed":ticker,"broker_connected":books_fresh,
+                "last_entry_quote_at":self.last_quote_at.isoformat() if self.last_quote_at else None,
                 "position_market_feed":self.position_ticker.snapshot() if self.position_ticker else {"state":"NOT_REQUIRED"},
                 "position_feed_error":self.position_feed_error,
                 "pnl":broker_view.pnl_summary(positions,books_fresh=books_fresh),

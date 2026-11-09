@@ -69,6 +69,18 @@ class PnlSnapshotTests(unittest.TestCase):
         self.assertIsNone(self.desk.last_quote_at,'Valuation ticks must not unlock signal readiness')
         self.assertEqual(self.broker.order_calls,0)
 
+    def test_late_packet_cannot_extend_execution_readiness(self):
+        self.desk.dhan_ids={'TESTA':'123','TESTB':'456'}
+        newest=self.now-timedelta(seconds=4)
+        self.desk.on_tick({'symbol':'TESTA','ltp':105,'timestamp':newest})
+        self.desk.on_tick({'symbol':'TESTB','ltp':106,'timestamp':newest-timedelta(seconds=2)})
+        state=self.desk.snapshot()
+        self.assertEqual(datetime.fromisoformat(state['last_entry_quote_at']),newest)
+        self.assertNotIn('FRESH_QUOTES',state['readiness_blockers'])
+        self.now+=timedelta(seconds=2)
+        self.assertIn('FRESH_QUOTES',self.desk.snapshot()['readiness_blockers'])
+        self.assertEqual(self.broker.order_calls,0)
+
     def test_snapshot_expires_quote_even_between_broker_refreshes(self):
         self.desk.quote_data={'TESTA':{'ltp':105,'tick_at':self.now.isoformat()}}
         self.assertEqual(self.desk.snapshot()['pnl']['gross_total'],15)

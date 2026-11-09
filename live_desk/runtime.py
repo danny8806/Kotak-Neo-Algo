@@ -23,6 +23,9 @@ from live_desk.ledger import LiveLedger
 from live_desk.strategy import LivePolicy, candidate_entry
 
 
+MAX_ENTRY_TICK_AGE = timedelta(seconds=5)
+
+
 class LiveRuntime:
     def __init__(self, *, session_date: date, signals: list[dict],
                  dhan_ids: dict[str, str], kotak_instruments: dict[str, KotakInstrument],
@@ -121,7 +124,7 @@ class LiveRuntime:
         if local.date() != self.session_date or local.time() < time(9, 16):
             return None
         age = self.clock().astimezone(IST) - local
-        if age < timedelta(seconds=-2) or age > timedelta(seconds=5):
+        if age < timedelta(seconds=-2) or age > MAX_ENTRY_TICK_AGE:
             return None
         try:price = Decimal(str(tick.get("ltp")))
         except (ValueError,TypeError,ArithmeticError):return None
@@ -184,7 +187,7 @@ class LiveRuntime:
         now = self.clock().astimezone(IST)
         return (self.enabled and not self.close_only and now.date() == self.session_date
                 and now.time() < self.policy.entry_cutoff
-                and timedelta(seconds=-2) <= now - at.astimezone(IST) <= timedelta(seconds=5))
+                and timedelta(seconds=-2) <= now - at.astimezone(IST) <= MAX_ENTRY_TICK_AGE)
 
     def _submit_and_reconcile(self, intent: dict, at: datetime) -> dict:
         tag = intent["tag"]

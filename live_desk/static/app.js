@@ -7,7 +7,7 @@ const fmt=(x,d=2)=>x===null||x===undefined||x===""||!Number.isFinite(Number(x))?
 const money=x=>x===null||x===undefined||x===""?"—":"₹"+fmt(x);
 const safeText=v=>v===undefined||v===null||v===""?"—":String(v);
 const human=v=>safeText(v).replaceAll("_"," ").toLowerCase().replace(/^./,c=>c.toUpperCase());
-const VIEWS={overview:["Overview","Session overview","YOUR SESSION AT A GLANCE","A clear view of your account, execution gates, and live connections."],signals:["News signals","Verified news signals","RESEARCH WORKSPACE","Inspect the current watchlist and the evidence behind each candidate."],market:["Market monitor","Opening range & instruments","MARKET DATA","Follow the opening range, observed crossings, and exact broker mappings."],positions:["Positions & P&L","Positions & profit and loss","LIVE ACCOUNT","Broker-confirmed quantities, fresh valuations, and transparent gross P&L."],orders:["Order book","Broker order book","EXECUTION WORKSPACE","Search every reported order and inspect its broker status."],fills:["Executed fills","Executed fills","BROKER-CONFIRMED ACTIVITY","Actual reported executions, quantities, and fill prices."],journal:["Trade journal","Trade journal & performance","HISTORICAL PERFORMANCE","Review persisted fills, confirmed trade outcomes, and order lifecycle events."],connections:["Connections & checks","Connections & diagnostics","SYSTEM OPERATIONS","Inspect authentication, data freshness, and read-only connection tests."],settings:["Configuration","Trading configuration","SESSION CONTROLS","Review sizing, position limits, session times, and order authorization."]};
+const VIEWS={overview:["Overview","Session overview","YOUR SESSION AT A GLANCE","Track live P&L, the opening workflow, and order readiness."],signals:["News signals","Verified news signals","RESEARCH WORKSPACE","Inspect the current watchlist and the evidence behind each candidate."],market:["Market monitor","Opening range & instruments","MARKET DATA","Follow the opening range, observed crossings, and exact broker mappings."],positions:["Positions & P&L","Positions & profit and loss","LIVE ACCOUNT","Broker-confirmed quantities, fresh valuations, and transparent gross P&L."],orders:["Order book","Broker order book","EXECUTION WORKSPACE","Search every reported order and inspect its broker status."],fills:["Executed fills","Executed fills","BROKER-CONFIRMED ACTIVITY","Actual reported executions, quantities, and fill prices."],journal:["Trade journal","Trade journal & performance","HISTORICAL PERFORMANCE","Review persisted fills, confirmed trade outcomes, and order lifecycle events."],connections:["Connections & checks","Connections & diagnostics","SYSTEM OPERATIONS","Inspect authentication, data freshness, and read-only connection tests."],settings:["Configuration","Trading configuration","SESSION CONTROLS","Review sizing, position limits, session times, and order authorization."]};
 const GATES={CURRENT_SESSION_SIGNALS:["Current-session research","signals"],KOTAK_AUTHENTICATION:["Kotak authentication","connections"],DHAN_AUTHENTICATION:["Dhan authentication","connections"],BROKER_BOOKS:["Fresh broker account books","connections"],INSTRUMENT_MAPPING:["Exact instrument mappings","market"],OPENING_RANGE:["Completed opening candle","market"],MARKET_FEED:["Market feed connection","market"],FRESH_QUOTES:["Fresh exchange prices","market"],MARKET_ENTRY_WINDOW:["Entry time window","settings"],FUNDS:["Funds and gross allocation","settings"],EXECUTION_RUNTIME:["Execution runtime","connections"],SUPERVISOR_ERROR:["Supervisor health","connections"],PRIOR_SESSION_RECOVERY:["Prior-session recovery","connections"],SERVER_ORDERS_DISABLED:["Server order permission","settings"]};
 let current=null,selectedSymbol=null,ws=null,lastStateReceipt=0,lastServerTime=0,activeView="overview",settingsDirty=false,stateStale=true,streamConnected=false,signalFilter="all",positionFilter="all",marketTab="orb",toastTimer,journalData=null,journalLoading=false,journalError=null;
 const pages={positions:1,orders:1,fills:1},PAGE_SIZE=50,renderCache=new Map();
@@ -19,7 +19,12 @@ function row(...cells){const n=el("tr");n.append(...cells);return n;}
 function emptyRow(cols,message){const r=el("tr"),c=el("td",message,"empty");c.colSpan=cols;r.append(c);return r;}
 function stamp(raw){if(!raw)return "—";const d=new Date(raw);return Number.isNaN(d.getTime())?"—":d.toLocaleString("en-IN",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short",hour12:false});}
 function tone(value){return value===null||value===undefined?"":Number(value)>=0?"positive":"negative";}
-function metric(id,value){text(id,money(value));$(id).className=(id==="mtm"?"value ":"")+tone(value);}
+function metric(id,value){
+ const node=$(id);
+ text(id,money(value));
+ node.classList.remove("positive","negative");
+ if(value!==null&&value!==undefined)node.classList.add(tone(value));
+}
 function changed(key,value){const signature=JSON.stringify(value);if(renderCache.get(key)===signature)return false;renderCache.set(key,signature);return true;}
 function notify(message){text("toast",message);$("toast").hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$("toast").hidden=true,4200);}
 function closeMenu(){$("sidebar").classList.remove("open");$("navScrim").hidden=true;$("menuToggle").setAttribute("aria-expanded","false");}
@@ -43,7 +48,7 @@ function services(s){
 }
 function renderServices(s){
  const items=services(s);if(changed("overviewConnections",items)){const f=document.createDocumentFragment();for(const item of items.slice(0,3)){const r=el("div",null,"connection-row"),copy=el("div",null,"service-copy");copy.append(el("strong",item.name),el("small",item.detail));r.append(el("span",item.mark,"service-logo"),copy,el("span",human(item.state),"status-text"+(item.ok?" positive":"")));f.append(r);}$("overviewConnections").replaceChildren(f);}
- if(activeView==="connections"&&changed("connectionCards",items)){const f=document.createDocumentFragment();for(const item of items){const card=el("article",null,"connection-card");card.append(el("span",item.name),el("strong",human(item.state),item.ok?"positive":""),el("small",item.detail));f.append(card);}$("connectionCards").replaceChildren(f);}
+ if(changed("connectionCards",items)){const f=document.createDocumentFragment();for(const item of items){const card=el("article",null,"connection-card");card.append(el("span",item.name),el("strong",human(item.state),item.ok?"positive":""),el("small",item.detail));f.append(card);}$("connectionCards").replaceChildren(f);}
 }
 const exchangeClock=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"});
 function exchangeTime(raw){
@@ -56,6 +61,25 @@ function sessionBanner(title,detail,tone,view,label){
  $("noticeAction").href="#"+view;
  text("noticeAction",label+" →");
 }
+function workflowStage(stage,label,status,tone=""){
+ $(stage).dataset.tone=tone;
+ text(label,status);
+}
+function renderOpeningWorkflow(s){
+ const signals=(s.signals||[]).filter(row=>row.entry_eligible===true).length;
+ const watchlist=s.watchlist_locked?(s.watchlist_eligible?signals+" locked":"No eligible stocks"):
+  s.watchlist_eligible?signals+" selected":s.watchlist_locked===false?"Collecting":"Unavailable";
+ workflowStage("stageWatchlist","workflowWatchlist",watchlist,s.watchlist_locked&&s.watchlist_eligible?"ready":"");
+ const orb=s.orb_monitor||{};
+ const ranges=(orb.opening_ranges||[]).length;
+ const opening=ranges?ranges+" verified":orb.state==="WARMING"?"Feed warming":"Waiting";
+ workflowStage("stageRange","workflowRange",opening,ranges?"ready":"");
+ workflowStage("stageEntries","workflowEntries",
+  s.readiness?(s.armed?"Armed":"Ready to arm"):"Blocked",s.readiness?(s.armed?"armed":"ready"):"blocked");
+ const closed=Array.isArray(s.closed_trades)?s.closed_trades.length:null;
+ workflowStage("stageExit","workflowExit",closed===null?"Unavailable":closed+" confirmed",closed?"ready":"");
+ text("positionOutcome",closed===null?"Confirmed NSE cash positions":closed+" confirmed ORB "+(closed===1?"close":"closes")+" today");
+}
 function renderSessionStatus(s){
  const blockers=new Set(s.readiness_blockers||[]),strategy=s.strategy||{};
  const cutoff=strategy.entry_cutoff?.slice(0,5),squareOff=strategy.exit_time?.slice(0,5);
@@ -66,11 +90,11 @@ function renderSessionStatus(s){
  const entryState=!now||!cutoff?"Window unavailable":pastCutoff?"Cutoff passed":
   blockers.has("MARKET_ENTRY_WINDOW")?"Outside entry window":"Before entry cutoff";
  text("sessionCutoff",cutoff);text("squareOffTime",squareOff);
- text("entryWindowState",entryState);text("tradingWindow",entryState);
+ text("tradingWindow",entryState);
  const bookAt=exchangeTime(s.broker_books_updated_at);
  text("bookFreshness",s.broker_connected?"Current":bookAt?"Stale":"Unavailable");
  text("bookLastSync",bookAt?"Last sync "+bookAt+" IST":"No broker sync yet");
- const tickAt=exchangeTime(s.market_feed?.last_exchange_trade_at);
+ const tickAt=exchangeTime(s.last_entry_quote_at);
  const tickCurrent=s.market_feed?.state==="CONNECTED"&&!s.market_feed.error&&!blockers.has("FRESH_QUOTES")&&tickAt;
  text("tickFreshness",tickCurrent?"Current":tickAt?"Stale":"Unavailable");
  text("tickLastTrade",tickAt?"Last trade "+tickAt+" IST":"No exchange tick yet");
@@ -96,14 +120,21 @@ function renderSessionStatus(s){
 function valuesForSettings(){const s=current?.strategy||{};return {settingAllocation:s.allocation_per_position,settingMaxPositions:s.max_positions,settingGross:s.gross_cap,settingMaxLong:s.max_long,settingMaxShort:s.max_short,settingCutoff:s.entry_cutoff,settingExit:s.exit_time};}
 function syncSettings(){if(!settingsDirty)for(const [id,value] of Object.entries(valuesForSettings()))if(value!==undefined)$(id).value=value;const allowed=current&&!current.armed;for(const id of Object.keys(valuesForSettings()))$(id).disabled=!allowed;$("saveSettings").disabled=!allowed||!settingsDirty;$("resetSettings").disabled=!settingsDirty;$("unsavedDot").hidden=!settingsDirty;pill("settingsState",current?.armed?"ARMED · LOCKED":settingsDirty?"UNSAVED CHANGES":"DISARMED · EDITABLE",settingsDirty?"amber":"");}
 function render(s){
- if(!s||s.mode!=="LIVE_KOTAK_NEO_ONLY"){disconnected("Unexpected service response. Controls are locked.");return;}
- const serverAt=Date.parse(s.server_time)||0;if(serverAt&&serverAt<lastServerTime)return;lastServerTime=serverAt;lastStateReceipt=Date.now();current=s;stateStale=false;document.querySelector(".view-container").classList.remove("is-stale");
+ const serverAt=Date.parse(s?.server_time);
+ if(s?.mode!=="LIVE_KOTAK_NEO_ONLY"||!Number.isFinite(serverAt)||
+    !["readiness","armed","orders_permitted_by_server"].every(key=>typeof s[key]==="boolean")||
+    !Array.isArray(s.readiness_blockers)){
+  disconnected("Unexpected service response. Controls are locked.");return;
+ }
+ if(serverAt<lastServerTime)return;lastServerTime=serverAt;lastStateReceipt=Date.now();current=s;stateStale=false;document.querySelector(".view-container").classList.remove("is-stale");
  const signals=s.signals||[],positions=s.positions||[],feed=s.market_feed?.state||"NOT_STARTED";
  metric("mtm",s.pnl?.gross_total??null);metric("realizedPnl",s.pnl?.gross_realized??null);metric("unrealizedPnl",s.pnl?.gross_unrealized??null);metric("netPnl",s.pnl?.net_after_fees??null);
  text("funds",money(s.available_cash));text("posCount",s.broker_connected?positions.filter(p=>Number(p.net_quantity)!==0).length:null);text("session",s.session_date);text("count",signals.length);text("navSignalCount",signals.length);
  const vix=s.quotes?.INDIAVIX||{};text("vix",vix.fresh?fmt(vix.ltp):null);text("vixAsOf",vix.fresh?"India VIX · Dhan index quote at "+stamp(vix.ohlc_at)+" IST":"India VIX is unavailable. It is context, not an entry trigger.");
  pill("mode",s.armed?"ORDERS ARMED":"ORDERS DISARMED",s.armed?"red":"");pill("source",human(s.signal_status||"UNAVAILABLE"),s.signal_status==="READY"?"green":"amber");pill("connection",s.broker_connected?"KOTAK CONNECTED":"KOTAK DISCONNECTED",s.broker_connected?"green":"red");pill("gate",s.armed?"ARMED":"DISARMED",s.armed?"red":"");pill("cutoff","Research cutoff: "+stamp(s.research_cutoff_at)+" IST");pill("feedBadge",human(feed),feed==="CONNECTED"?"green":"amber");
- const blockers=s.readiness_blockers||[],passed=Object.keys(GATES).length-blockers.filter(k=>GATES[k]).length;text("gateSummary",passed+" of "+Object.keys(GATES).length+" prerequisites verified");text("allGateSummary",s.readiness?"All entry checks passed":blockers.length+" checks need attention before new entries");gates(s);renderSessionStatus(s);
+ const blockers=s.readiness_blockers||[],total=Object.keys(GATES).length,passed=total-new Set(blockers.filter(k=>GATES[k])).size;
+ $("gateProgress").max=total;$("gateProgress").value=passed;
+ text("gateSummary",passed+" of "+total+" prerequisites verified");text("allGateSummary",s.readiness?"All entry checks passed":blockers.length+" checks need attention before new entries");gates(s);renderSessionStatus(s);renderOpeningWorkflow(s);
  text("policy","09:15 one-minute opening range. New-entry cutoff "+safeText(s.strategy?.entry_cutoff)+"; square-off "+safeText(s.strategy?.exit_time)+" IST. Up to "+safeText(s.strategy?.max_long)+" LONG / "+safeText(s.strategy?.max_short)+" SHORT, "+safeText(s.strategy?.max_positions)+" total positions. Allocation "+money(s.strategy?.allocation_per_position)+" per stock; gross cap "+money(s.strategy?.gross_cap)+".");
  text("armNotice",!s.orders_permitted_by_server?"Server order permission is off. Account monitoring remains read-only.":s.armed?"This session is armed for actual Kotak orders.":s.readiness?"Prerequisites passed. Operator authorization and TOTP are required.":"Order authorization is locked until all prerequisites pass.");
  $("arm").disabled=!(s.orders_permitted_by_server===true&&s.readiness===true&&!s.armed);$("disarm").disabled=!s.armed;syncSettings();
@@ -187,13 +218,24 @@ function renderJournal(){const data=journalData;if(!data){for(const id of ["jour
  const fills=data.fills||[];text("journalFillCount",fills.length+" persisted fills");if(changed("journalFills",fills)){const f=document.createDocumentFragment();if(!fills.length)f.append(emptyRow(7,"No broker fills have been persisted yet."));for(const fill of fills)f.append(row(td(stamp(fill.broker_time||fill.first_seen_at)),td(fill.trading_symbol||fill.symbol,"code"),td(fill.side||"—"),td(fmt(fill.quantity,0),"numeric"),td(money(fill.price),"numeric"),td(fill.broker_fill_id||"—","code"),td(fill.broker_order_id||"—","code")));$("journalFillBody").replaceChildren(f);}}
 function disconnected(message){
  stateStale=true;document.querySelector(".view-container").classList.add("is-stale");
- pill("connection","DISCONNECTED","red");$("arm").disabled=true;$("saveSettings").disabled=true;for(const id of ["funds","posCount","mtm","realizedPnl","unrealizedPnl","netPnl","positionTotalPnl","positionRealizedPnl","positionUnrealizedPnl","positionOpenCount"])text(id,null);
+ pill("connection","DISCONNECTED","red");pill("mode","ORDER STATE UNKNOWN","amber");pill("gate","UNKNOWN","amber");pill("source","UNAVAILABLE","amber");
+ $("arm").disabled=true;$("disarm").disabled=true;$("saveSettings").disabled=true;for(const id of ["funds","posCount","mtm","realizedPnl","unrealizedPnl","netPnl","positionTotalPnl","positionRealizedPnl","positionUnrealizedPnl","positionOpenCount"])text(id,null);
  $("positionBody").replaceChildren(emptyRow(8,"Live account data unavailable. Reconnecting."));
  text("positionClosedAsOf","Trade status unavailable");
  $("positionClosedBody").replaceChildren(emptyRow(6,"Waiting for the session state to reconnect."));
  renderCache.clear();
+ text("risk","UNKNOWN");$("risk").className="value status-value";
+ text("riskReason","Waiting for live status");
+ text("gateSummary","Live checks unavailable");text("allGateSummary","Live checks unavailable");
+ $("gateProgress").removeAttribute("value");
+ for(const id of ["overviewGates","allGates","overviewConnections","connectionCards"])
+  $(id).replaceChildren(el("p","Waiting for live status.","status-placeholder"));
+ for(const [stage,label] of [["stageWatchlist","workflowWatchlist"],["stageRange","workflowRange"],
+  ["stageEntries","workflowEntries"],["stageExit","workflowExit"]])workflowStage(stage,label,"Unavailable");
+ for(const id of ["count","vix","navSignalCount"])text(id,null);
+ text("positionOutcome","Waiting for live status");text("vixAsOf","Dhan index quote unavailable");
  sessionBanner("Live status unavailable",message,"blocked","connections","View checks");
- text("entryWindowState","Status unavailable");text("tradingWindow","Status unavailable");
+ text("tradingWindow","Status unavailable");
  text("bookFreshness","Unavailable");text("bookLastSync","Waiting for sync");
  text("tickFreshness","Unavailable");text("tickLastTrade","Waiting for feed");
  text("streamLabel","Connection interrupted");$("streamDot").className="status-dot";
@@ -202,9 +244,9 @@ let fetchInFlight=false;
 async function getState(){if(fetchInFlight)return;fetchInFlight=true;try{const r=await fetch(route("/api/state"),{credentials:"same-origin",cache:"no-store",signal:AbortSignal.timeout(5000)});if(r.status===401){location.assign(route("/login"));return;}if(!r.ok)throw Error("HTTP "+r.status);render(await r.json());}catch{if(Date.now()-lastStateReceipt>5000)disconnected("Live data is unavailable. Reconnecting; verify your account directly with Kotak.");}finally{fetchInFlight=false;}}
 function connect(){
  if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;ws=new WebSocket((location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+route("/ws"));
- ws.onopen=()=>{streamConnected=true;if(current)renderServices(current);};
+ ws.onopen=()=>{streamConnected=true;if(current&&!stateStale)renderServices(current);};
  ws.onmessage=e=>{try{render(JSON.parse(e.data));}catch{disconnected("Dashboard stream is invalid; reconnecting.");}};
- ws.onclose=e=>{streamConnected=false;if(e.code===4401){location.assign(route("/login"));return;}if(current)renderServices(current);setTimeout(connect,3000);};ws.onerror=()=>ws.close();
+ ws.onclose=e=>{streamConnected=false;if(e.code===4401){location.assign(route("/login"));return;}if(current&&!stateStale)renderServices(current);setTimeout(connect,3000);};ws.onerror=()=>ws.close();
 }
 async function runChecks(){
  const button=$("runChecks");button.disabled=true;button.textContent="Checking…";const paths=[["Service health","/health"],["Trading readiness","/ready"],["Current live state","/api/state"],["Broker positions","/api/live/positions"],["Broker orders","/api/live/orders"],["Executed fills","/api/live/fills"]];$("checkResults").replaceChildren(el("p","Running read-only connection checks…","detail"));
