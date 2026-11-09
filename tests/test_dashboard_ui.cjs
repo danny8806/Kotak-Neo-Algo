@@ -66,7 +66,13 @@ function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOSt
   await go('signals');assert.equal(await page.locator('#signalBody tr').count(),2);
   await page.locator('#signalSearch').fill('TESTB');assert.equal(await page.locator('#signalBody tr').count(),1);await page.locator('#signalBody button').click();assert.match(await page.locator('#evidence').textContent(),/fixture B/);
   await page.locator('#signalSearch').fill('');await page.locator('#signalFilters [data-filter="LONG"]').click();assert.equal(await page.locator('#signalBody tr').count(),1);assert.match(await page.locator('#signalBody').textContent(),/TESTA/);
-  await go('market');assert.equal(await page.locator('#orbBody tr').count(),2);await page.locator('[data-market-tab="mapping"]').click();assert.equal(await page.locator('#mappingBody tr').count(),2);await page.locator('#marketSearch').fill('TESTA');assert.equal(await page.locator('#mappingBody tr').count(),1);
+  await go('market');assert.equal(await page.locator('#orbBody tr').count(),2);
+  state.orb_monitor.state='ENTRY_WINDOW_CLOSED';state.signals[0].entry_status='EXPIRED';await push();
+  assert.match(await page.locator('#orbInfo').textContent(),/Entry monitoring ended/);
+  assert.match(await page.locator('#orbBody').textContent(),/Expired · no trigger/);
+  await go('signals');assert.match(await page.locator('#signalBody').textContent(),/Expired · no trigger/);
+  state.orb_monitor.state='MONITORING';delete state.signals[0].entry_status;await push();
+  await go('market');await page.locator('[data-market-tab="mapping"]').click();assert.equal(await page.locator('#mappingBody tr').count(),2);await page.locator('#marketSearch').fill('TESTA');assert.equal(await page.locator('#mappingBody tr').count(),1);
   await go('positions');assert.equal(await page.locator('#positionBody td').count(),8);await page.locator('#positionBody .row-open').click();await page.locator('#detailDialog').waitFor({state:'visible'});assert.match(await page.locator('#detailContent').textContent(),/105/);await page.keyboard.press('Escape');await page.locator('#detailDialog').waitFor({state:'hidden'});
   assert.equal(await page.locator('#positionTotalPnl').textContent(),'₹75.00');
   assert.equal(await page.locator('#positionOpenCount').textContent(),'1');

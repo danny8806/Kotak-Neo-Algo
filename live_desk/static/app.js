@@ -75,7 +75,8 @@ function renderOpeningWorkflow(s){
  const opening=ranges?ranges+" verified":orb.state==="WARMING"?"Feed warming":"Waiting";
  workflowStage("stageRange","workflowRange",opening,ranges?"ready":"");
  workflowStage("stageEntries","workflowEntries",
-  s.readiness?(s.armed?"Armed":"Ready to arm"):"Blocked",s.readiness?(s.armed?"armed":"ready"):"blocked");
+  orb.state==="ENTRY_WINDOW_CLOSED"?"Cutoff passed":s.readiness?(s.armed?"Armed":"Ready to arm"):"Blocked",
+  s.readiness?(s.armed?"armed":"ready"):"blocked");
  const closed=Array.isArray(s.closed_trades)?s.closed_trades.length:null;
  workflowStage("stageExit","workflowExit",closed===null?"Unavailable":closed+" confirmed",closed?"ready":"");
  text("positionOutcome",closed===null?"Confirmed NSE cash positions":closed+" confirmed ORB "+(closed===1?"close":"closes")+" today");
@@ -236,7 +237,7 @@ function renderSignals(){
  const q=query("signalSearch"),signals=(current.signals||[]).filter(s=>s.symbol.toLowerCase().includes(q)&&(signalFilter==="all"||s.side===signalFilter)).sort((a,b)=>(a.side||"").localeCompare(b.side||"")||(a.rank||0)-(b.rank||0));
  text("signalResultCount",signals.length+" stocks");const data=signals.map(s=>[s,current.quotes?.[s.symbol]||{}]);
  if(changed("signals",data)){const f=document.createDocumentFragment();if(!signals.length)f.append(emptyRow(6,(current.signals||[]).length?"No candidates match these filters.":"No current-session verified news signals. New entries remain locked."));
- for(const s of signals){const quote=current.quotes?.[s.symbol]||{},price=quote.fresh?quote.ltp:null,opened=quote.open||null,change=price!==null&&opened?100*(price-opened)/opened:null,stock=td(null),b=el("button",s.symbol,"stock-button");b.addEventListener("click",()=>{selectedSymbol=s.symbol;renderEvidence();});stock.append(b);if(s.entry_eligible===false)stock.append(el("small","Research only","muted"));f.append(row(td(s.rank),stock,td(s.side,"side "+(s.side==="LONG"?"long":"short")),td(money(price),"numeric"),td(money(opened),"numeric"),td(change===null?"—":(change>=0?"+":"")+fmt(change)+"%","numeric "+tone(change))));}$("signalBody").replaceChildren(f);}
+ for(const s of signals){const quote=current.quotes?.[s.symbol]||{},price=quote.fresh?quote.ltp:null,opened=quote.open||null,change=price!==null&&opened?100*(price-opened)/opened:null,stock=td(null),b=el("button",s.symbol,"stock-button");b.addEventListener("click",()=>{selectedSymbol=s.symbol;renderEvidence();});stock.append(b);if(s.entry_eligible===false)stock.append(el("small","Research only","muted"));else if(s.entry_status==="EXPIRED")stock.append(el("small","Expired · no trigger","muted"));f.append(row(td(s.rank),stock,td(s.side,"side "+(s.side==="LONG"?"long":"short")),td(money(price),"numeric"),td(money(opened),"numeric"),td(change===null?"—":(change>=0?"+":"")+fmt(change)+"%","numeric "+tone(change))));}$("signalBody").replaceChildren(f);}
  if(!selectedSymbol||(current.signals||[]).every(s=>s.symbol!==selectedSymbol))selectedSymbol=signals[0]?.symbol||null;renderEvidence();
 }
 function renderEvidence(){
@@ -248,9 +249,24 @@ function renderEvidence(){
 function renderMarket(){
  $("orbPanel").hidden=marketTab!=="orb";$("mappingPanel").hidden=marketTab!=="mapping";
  if(marketTab==="mapping"){const rows=filtered("mapping"),all=current.instrument_mappings||[];text("mappingInfo",all.length?all.filter(r=>r.dhan_security_id).length+" / "+all.length+" Dhan IDs · "+all.filter(r=>r.kotak_token&&r.kotak_trading_symbol).length+" / "+all.length+" Kotak mappings":"Waiting for today's verified research report.");if(!changed("mapping",rows))return;const f=document.createDocumentFragment();if(!rows.length)f.append(emptyRow(5,"Exact mappings appear after current-session candidates are verified."));for(const m of rows)f.append(row(td(m.symbol,"code"),td(m.dhan_security_id||"—","code"),td(m.kotak_trading_symbol||"—","code"),td(m.kotak_token||"—","code"),td(human(m.status))));$("mappingBody").replaceChildren(f);return;}
- const orb=current.orb_monitor||{},ranges=(orb.opening_ranges||[]).filter(r=>r.symbol.toLowerCase().includes(query("marketSearch"))),data=ranges.map(r=>[r,current.quotes?.[r.symbol],(orb.breakouts||[]).find(b=>b.symbol===r.symbol)]);
- text("orbInfo",orb.state==="MONITORING"?orb.order_submission_enabled?"Fresh ticks monitored · order gate armed separately":"Live tick monitoring · order gate remains disarmed":orb.state==="WARMING"?"Dhan feed warming · waiting for the 09:15–09:16 candle.":"Waiting for verified signals and a completed opening candle.");if(!changed("orb",data))return;const f=document.createDocumentFragment();if(!ranges.length)f.append(emptyRow(6,"No opening-range monitor matches this view."));
- for(const range of ranges){const signal=(current.signals||[]).find(s=>s.symbol===range.symbol)||{},quote=current.quotes?.[range.symbol]||{},event=(orb.breakouts||[]).find(e=>e.symbol===range.symbol);f.append(row(td(range.symbol,"code"),td(signal.side||"—"),td(range.high,"numeric"),td(range.low,"numeric"),td(quote.fresh?money(quote.ltp):"—","numeric"),td(event?"Observed · "+stamp(event.triggered_at):"Waiting for cross",event?"positive":"")));}$("orbBody").replaceChildren(f);
+ const orb=current.orb_monitor||{},closed=orb.state==="ENTRY_WINDOW_CLOSED";
+ const ranges=(orb.opening_ranges||[]).filter(r=>r.symbol.toLowerCase().includes(query("marketSearch")));
+ const signals=new Map((current.signals||[]).map(signal=>[signal.symbol,signal]));
+ const breakouts=new Map((orb.breakouts||[]).map(event=>[event.symbol,event]));
+ const data=ranges.map(r=>[r,current.quotes?.[r.symbol],breakouts.get(r.symbol),signals.get(r.symbol)]);
+ text("orbInfo",closed?"Entry monitoring ended at the cutoff. Broker reconciliation and square-off continue.":
+  orb.state==="MONITORING"?orb.order_submission_enabled?"Fresh ticks monitored · order gate armed separately":"Live tick monitoring · order gate remains disarmed":
+  orb.state==="WARMING"?"Dhan feed warming · waiting for the 09:15–09:16 candle.":"Waiting for verified signals and a completed opening candle.");
+ if(!changed("orb",[closed,data]))return;
+ const rows=document.createDocumentFragment();
+ if(!ranges.length)rows.append(emptyRow(6,closed?"The entry window has closed.":"No opening-range monitor matches this view."));
+ for(const [range,quote,event,signal] of data){
+  const status=event?"Observed · "+stamp(event.triggered_at):signal?.entry_status==="ENTRY_RECORDED"?"Entry recorded":
+   closed?"Expired · no trigger":"Waiting for cross";
+  rows.append(row(td(range.symbol,"code"),td(signal?.side||"—"),td(range.high,"numeric"),td(range.low,"numeric"),
+   td(quote?.fresh?money(quote.ltp):"—","numeric"),td(status,event?"positive":"")));
+ }
+ $("orbBody").replaceChildren(rows);
 }
 function renderActive(){if(!current||stateStale)return;if(activeView==="signals")renderSignals();else if(activeView==="positions")renderPositions();else if(activeView==="orders"||activeView==="fills")renderBook(activeView);else if(activeView==="journal")renderJournal();else if(activeView==="market")renderMarket();else if(activeView==="connections"){gates(current,true);renderServices(current);}}
 async function loadJournal(){if(journalLoading||activeView!=="journal")return;journalLoading=true;try{const r=await fetch(route("/api/live/journal?limit=1000"),{credentials:"same-origin",cache:"no-store",signal:AbortSignal.timeout(10000)});if(r.status===401){location.assign(route("/login"));return;}if(!r.ok)throw Error("HTTP "+r.status);journalData=await r.json();journalError=null;renderJournal();}catch{journalError="Trade history is unavailable. Reconnecting…";renderJournal();}finally{journalLoading=false;}}

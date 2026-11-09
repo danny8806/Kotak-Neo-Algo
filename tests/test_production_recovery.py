@@ -817,18 +817,23 @@ class ProductionReplayTests(unittest.TestCase):
                 previous_report=data
                 response=publish(data,f"five-day-{day_index}")
                 self.assertEqual(response.status_code,200,response.text)
+                if day_index==4:
+                    self.assertEqual(publish(report("TESTC"),"five-day-untriggered").status_code,200)
                 desk.cycle()
                 self.assertIsNotNone(desk.ticker)
                 self.assertIsNone(desk.runtime)
                 baseline,cross=(100,101) if side=="LONG" else (95,94)
                 now[0]=day.replace(minute=15,second=59)
                 tick(symbol,baseline)
+                if day_index==4:
+                    tick("TESTC",100)
                 now[0]=day.replace(minute=16)
                 if day_index==4:
                     self.assertEqual(publish(report("TESTD"),"five-day-late").status_code,200)
                 desk.cycle()
                 state=desk.snapshot()
-                self.assertEqual({row["symbol"] for row in state["signals"] if row["entry_eligible"]},{symbol})
+                eligible={symbol,"TESTC"} if day_index==4 else {symbol}
+                self.assertEqual({row["symbol"] for row in state["signals"] if row["entry_eligible"]},eligible)
                 self.assertIsNotNone(desk.runtime)
                 if day_index==4:
                     self.assertEqual(state["signals"][-1]["symbol"],"TESTD")
@@ -866,11 +871,21 @@ class ProductionReplayTests(unittest.TestCase):
                 self.assertEqual(broker.calls[-1]["transaction_type"],"B" if side=="LONG" else "S")
 
                 now[0]=day.replace(minute=30)
+                with patch.object(desk.runtime,"on_market_tick",wraps=desk.runtime.on_market_tick) as runtime_tick:
+                    tick(symbol,baseline,now[0]-timedelta(seconds=1))
+                    if day_index==4:
+                        tick("TESTC",101,now[0]-timedelta(seconds=1))
+                    runtime_tick.assert_not_called()
                 desk.cycle()
                 self.assertFalse(desk.armed)
-                tick(symbol,baseline)
                 tick(symbol,cross)
+                cutoff_state=desk.snapshot()
+                self.assertEqual(cutoff_state["orb_monitor"]["state"],"ENTRY_WINDOW_CLOSED")
                 self.assertEqual(len(broker.calls),before+1)
+                if day_index==4:
+                    dispositions={s["symbol"]:s["entry_status"] for s in cutoff_state["signals"]}
+                    self.assertEqual(dispositions,{"TESTA":"ENTRY_RECORDED","TESTC":"EXPIRED","TESTD":"RESEARCH_ONLY"})
+                    self.assertEqual({e["symbol"] for e in cutoff_state["orb_monitor"]["breakouts"]},{"TESTA"})
 
                 now[0]=day.replace(hour=15,minute=15)
                 desk.cycle()
@@ -891,7 +906,7 @@ class ProductionReplayTests(unittest.TestCase):
             journal=client.get("/api/live/journal").json()
             trades={(row["session_date"],row["symbol"]):row for row in journal["trades"]}
             self.assertEqual(session_summaries,["closed","stalled order carried","closed","no signals","closed"])
-            self.assertEqual(len(candles),4)
+            self.assertEqual(len(candles),5)
             self.assertEqual(len(broker.calls),7)
             self.assertEqual(len(journal["fills"]),6)
             self.assertEqual(journal["summary"]["closed_trade_count"],3)
@@ -899,5 +914,6 @@ class ProductionReplayTests(unittest.TestCase):
             self.assertEqual(trades[("2026-11-03","TESTB")]["status"],"UNFILLED")
             self.assertEqual(trades[("2026-11-02","TESTA")]["direction"],"LONG")
             self.assertEqual(trades[("2026-11-06","TESTA")]["direction"],"SHORT")
+            self.assertNotIn(("2026-11-06","TESTC"),trades)
             self.assertEqual(desk.snapshot()["prior_session_recovery_count"],0)
             print(f"Five trading days: {session_summaries}; 7 submissions, 6 fills, 3 closed trades",flush=True)

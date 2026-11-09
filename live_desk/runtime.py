@@ -138,7 +138,8 @@ class LiveRuntime:
     def on_market_tick(self, symbol, price, at, now, received_ns=None, feed_generation=None):
         """Process a supervisor-validated price with no second parsing pass."""
         local=at.astimezone(IST)
-        if local.date()!=self.session_date or local.time()<time(9,16):
+        if (local.date()!=self.session_date or not time(9,16)<=local.time()<self.policy.entry_cutoff
+                or now.astimezone(IST).time()>=self.policy.entry_cutoff):
             return None
         age=now-local
         if age<timedelta(seconds=-2) or age>MAX_ENTRY_TICK_AGE:

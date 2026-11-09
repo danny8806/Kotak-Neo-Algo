@@ -72,6 +72,29 @@ class PnlSnapshotTests(unittest.TestCase):
         self.assertIsNone(self.desk.last_quote_at,'Valuation ticks must not unlock signal readiness')
         self.assertEqual(self.broker.order_calls,0)
 
+    def test_cutoff_stops_candle_and_trigger_work_but_keeps_open_position_pnl(self):
+        from unittest.mock import Mock
+
+        self.now=self.now.replace(minute=30)
+        desk=self.desk
+        desk.dhan_ids={"TESTA":"123","TESTB":"456"}
+        desk.dhan=Mock()
+        desk.refresh_broker()
+        desk.runtime=Mock()
+        desk.runtime.errors=[]
+        with patch.object(desk,"_observe_orb_crossing") as observe:
+            desk.on_tick({"symbol":"TESTA","ltp":105,"timestamp":self.now-timedelta(seconds=1)})
+            desk.on_tick({"symbol":"TESTB","ltp":105,"timestamp":self.now})
+            desk.runtime.on_market_tick.assert_not_called()
+            observe.assert_not_called()
+        desk.poll_ohlc()
+        desk.dhan.get_ohlc.assert_not_called()
+        state=desk.snapshot()
+        self.assertEqual(state["pnl"]["gross_total"],15)
+        self.assertNotIn("TESTB",state["quotes"])
+        self.assertIsNone(state["last_entry_quote_at"])
+        self.assertFalse(state["orb_monitor"]["order_submission_enabled"])
+
     def test_late_packet_cannot_extend_execution_readiness(self):
         self.desk.dhan_ids={'TESTA':'123','TESTB':'456'}
         newest=self.now-timedelta(seconds=4)

@@ -302,7 +302,7 @@ class LiveSupervisor:
     def _refresh_vix_context(self,now):
         if (not self.dhan or not self.dhan_auth or
             self.dhan_auth.snapshot().get("state")!="AUTHENTICATED" or
-            now.weekday()>=5 or not time(9,15)<=now.time()<time(15,30)):
+            now.weekday()>=5 or not time(9,15)<=now.time()<self.policy.entry_cutoff):
             return
         if self.last_vix_attempt and now-self.last_vix_attempt<timedelta(seconds=20):return
         self.last_vix_attempt=now
@@ -552,7 +552,7 @@ class LiveSupervisor:
         now=self.now()
         if not self.dhan or not self.dhan_ids or now.weekday()>=5:
             return
-        if not time(9,15)<=now.time()<time(15,30):return
+        if not time(9,15)<=now.time()<self.policy.entry_cutoff:return
         if self.last_ohlc_at and now-self.last_ohlc_at<timedelta(seconds=20):
             return
         result=self.dhan.get_ohlc(self.dhan_ids)
@@ -571,12 +571,17 @@ class LiveSupervisor:
             return
         symbol=str(tick.get("symbol") or "")
         if symbol not in self.dhan_ids:return
+        entry_closed=now.time()>=self.policy.entry_cutoff
+        # Reuse the subscription for open-position valuation only after cutoff.
+        if entry_closed and not any(row["symbol"]==symbol and row["net_quantity"]
+                                    for row in self.broker_positions):
+            return
         try:value=Decimal(str(tick.get("ltp")))
         except (ValueError,TypeError,ArithmeticError):return
         if not value.is_finite() or value<=0:return
         generation=tick.get("feed_generation")
         with self.lock:
-            if generation is not None and generation!=self._entry_generation:
+            if not entry_closed and generation is not None and generation!=self._entry_generation:
                 if self._entry_generation is not None:
                     if generation<self._entry_generation:return
                     self._orb_previous.clear()
@@ -589,6 +594,8 @@ class LiveSupervisor:
             if previous.get("tick_at") and ts.astimezone(IST)<datetime.fromisoformat(previous["tick_at"]):return
             self.quote_data[symbol]={**previous,"ltp":float(value),
                                      "tick_at":ts.astimezone(IST).isoformat()}
+            if entry_closed:
+                return
             self.last_quote_at=max(ts, self.last_quote_at or ts)
             ready=self.armed and self._health_check_locked(now)
             if self.runtime:self.runtime.enabled=ready
@@ -596,13 +603,12 @@ class LiveSupervisor:
         if runtime:
             runtime.on_market_tick(symbol,value,ts,now,tick.get("received_ns"),generation)
         self._observe_orb_crossing(symbol,value,ts,now)
-        # Position exits follow the configured 15:15 IST square-off policy.
-        # Loss limits disarm new entries; they do not create an implicit stop.
 
     def _observe_orb_crossing(self,symbol,price,tick_at,now):
         local=tick_at.astimezone(IST)
         if (local.date().isoformat()!=self.session_date or local.time()<time(9,16) or
-            local.time()>=self.policy.entry_cutoff or symbol not in self.opening_ranges):
+            now.time()>=self.policy.entry_cutoff or local.time()>=self.policy.entry_cutoff
+            or symbol not in self.opening_ranges):
             return
         with self.lock:
             previous_at=self._orb_last_tick.get(symbol)
@@ -823,8 +829,9 @@ class LiveSupervisor:
                     self.blocked_stage="NEEDS_KOTAK_CREDENTIALS"
         if refresh_due and opening_boundary and self.now().time()>=START:
             self.refresh_broker()
-        if not time(9,15)<=self.now().time()<time(9,16,5):
-            self._refresh_vix_context(now)
+        current=self.now()
+        if not time(9,15)<=current.time()<time(9,16,5):
+            self._refresh_vix_context(current)
         if self.armed and not self.ready():
             self.disarm("Broker or market data health degraded")
         # Entries cannot be recreated after restart without manual arming.
@@ -866,6 +873,7 @@ class LiveSupervisor:
     def snapshot(self):
         now=self.now()
         with self.lock:
+            entry_closed=now.time()>=self.policy.entry_cutoff
             entry_symbols={row["symbol"] for row in self.report["signals"]} if self.entry_watchlist else set()
             research=self.research_report or self.report
             signals=[{**row,"entry_eligible":row["symbol"] in entry_symbols}
@@ -902,12 +910,13 @@ class LiveSupervisor:
                             "DHAN_READY_KOTAK_PENDING" if symbol in self.dhan_ids else "UNAVAILABLE"
                 } for symbol in sorted({row["symbol"] for row in signals})],
                 "orb_monitor":{
-                    "state":"MONITORING" if self.ticker and self.opening_ranges else
+                    "state":"ENTRY_WINDOW_CLOSED" if entry_closed else
+                            "MONITORING" if self.ticker and self.opening_ranges else
                             "WARMING" if self.ticker else "NOT_STARTED",
                     "opening_ranges":[{"symbol":symbol,"high":str(values[0]),"low":str(values[1])}
                                       for symbol,values in sorted(self.opening_ranges.items())],
                     "breakouts":list(self.orb_events.values()),
-                    "order_submission_enabled":bool(self.armed and self.runtime),
+                    "order_submission_enabled":bool(not entry_closed and self.armed and self.runtime),
                 },
                 "research_cutoff_at":self.report.get("news_cutoff_at") if self.report else None,
                 "report_hash":self.report_sha,"armed":self.armed,
@@ -946,5 +955,15 @@ class LiveSupervisor:
         intents=self.ledger.snapshot(now.date())
         trades=build_trade_journal(intents,[],[])["trades"]
         result["intents"]=intents
+        submitted={row["symbol"] for row in intents if row["phase"]=="ENTRY"}
+        observed={row["symbol"] for row in result["orb_monitor"]["breakouts"]}
+        for signal in result["signals"]:
+            symbol=signal["symbol"]
+            signal["entry_status"]=(
+                "RESEARCH_ONLY" if not signal["entry_eligible"] else
+                "ENTRY_RECORDED" if symbol in submitted else
+                "BREAKOUT_OBSERVED" if symbol in observed else
+                "EXPIRED" if entry_closed else "WAITING"
+            )
         result["closed_trades"]=[row for row in trades if row["status"]=="CLOSED"]
         return result
