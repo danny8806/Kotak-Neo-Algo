@@ -6,14 +6,14 @@ submission requires authenticated broker access, validated research,
 live Dhan prices, and an explicit per-session arming operation.
 """
 from __future__ import annotations
-import json, logging, os, threading
+import hashlib, json, logging, os, threading
 from dataclasses import replace
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from sqlalchemy import select
-from bridge.app import reports
+from sqlalchemy import select, text
+from bridge.app import reports, signal_batches
 from scripts.validate_signals import validate
 from live_desk.dhan_data import DhanDataClient, DhanTokenSupervisor, IST
 from live_desk.dhan_instruments import fetch_dhan_symbols
@@ -27,9 +27,12 @@ from live_desk.orb import opening_range
 from live_desk.runtime import LiveRuntime
 from live_desk.ticker import LiveTicker
 from live_desk import broker_view
+from live_desk.analytics import build_trade_journal
 
 LOG=logging.getLogger("news-kotak-live")
-START=time(9,17)
+FEED_WARMUP=time(9,14)
+WATCHLIST_LOCK=time(9,15)
+START=time(9,16)
 BOOK_REFRESH=timedelta(seconds=5)
 BOOK_EXPIRY=timedelta(seconds=20)
 PRICE_EXPIRY=timedelta(seconds=8)
@@ -75,10 +78,14 @@ class LiveSupervisor:
         self.prior_session_recovery=0
         self.report=None
         self.report_sha=None
+        self.entry_watchlist=False
+        self.research_report=None
+        self.research_dhan_ids={}
         self.session_date=None
         self.dhan=None
         self.broker=None
         self.ticker=None
+        self.ticker_symbols=set()
         self.position_ticker=None
         self.position_dhan_ids={}
         self.position_feed_error=None
@@ -87,6 +94,7 @@ class LiveSupervisor:
         self.dhan_ids={}
         self.kotak_ids={}
         self.opening_ranges={}
+        self._pending_opening_ranges={}
         self.orb_events={}
         self._orb_previous={}
         self._orb_last_tick={}
@@ -143,14 +151,50 @@ class LiveSupervisor:
 
     def today_report(self):
         now=self.now()
-        with self.database.connect() as conn:
+        lock_at=datetime.combine(now.date(), WATCHLIST_LOCK, tzinfo=IST)
+        with self.database.begin() as conn:
+            if now >= lock_at:
+                # Wait for any pre-open ingest transaction to commit before freezing.
+                conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('signal-ingest'), hashtext(:day))"),
+                             {"day": now.date().isoformat()})
             record=conn.execute(select(reports).where(
                 reports.c.session_date==now.date().isoformat())).mappings().first()
-        if not record:return None,None
-        data=json.loads(record["original_json"])
+            if not record:
+                return None, None, False, None
+            aggregate=json.loads(record["original_json"])
+            data=aggregate
+            digest=record["sha256"]
+            eligible=record["received_at"] < lock_at and data["status"]=="READY"
+            if not eligible and now.weekday()<5:
+                batches=conn.execute(select(signal_batches.c.original_json).where(
+                    signal_batches.c.session_date==now.date().isoformat(),
+                    signal_batches.c.received_at < lock_at,
+                ).order_by(signal_batches.c.id)).scalars()
+                signals={}
+                ready_batches=0
+                for raw in batches:
+                    batch=json.loads(raw)
+                    if batch["status"]!="READY":
+                        continue
+                    ready_batches+=1
+                    for item in batch["signals"]:
+                        prior=signals.setdefault(item["symbol"], item)
+                        if prior["side"]!=item["side"]:
+                            raise ValueError("Conflicting direction in pre-open watchlist")
+                    data=batch
+                if signals:
+                    if ready_batches>1:
+                        counts={"LONG":0,"SHORT":0}
+                        for item in signals.values():
+                            counts[item["side"]]+=1
+                            item["rank"]=counts[item["side"]]
+                        data={**data,"signals":list(signals.values())}
+                    raw=json.dumps(data,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+                    digest=hashlib.sha256(raw.encode()).hexdigest()
+                    eligible=True
         validate(data,expected_date=now.date().isoformat(),
                  allowed_symbols=self.allowed_symbols)
-        return data,record["sha256"]
+        return data,digest,eligible and now.weekday()<5,aggregate
 
     def _new_day(self,day):
         with self.lock:
@@ -162,6 +206,7 @@ class LiveSupervisor:
             if self.ticker:self.ticker.stop()
             if self.position_ticker:self.position_ticker.stop()
             self.ticker=None
+            self.ticker_symbols=set()
             self.position_ticker=None
             self.position_dhan_ids={}
             self.position_feed_retry_at=None
@@ -170,9 +215,13 @@ class LiveSupervisor:
             self.broker=None
             self.report=None
             self.report_sha=None
+            self.entry_watchlist=False
+            self.research_report=None
+            self.research_dhan_ids={}
             self.dhan_ids={}
             self.kotak_ids={}
             self.opening_ranges={}
+            self._pending_opening_ranges={}
             self.orb_events={}
             self._orb_previous={}
             self._orb_last_tick={}
@@ -192,21 +241,25 @@ class LiveSupervisor:
             self.session_date=day
 
     def _load_report(self):
-        report,sha=self.today_report()
+        report,sha,eligible,research=self.today_report()
         if not report or report["status"]!="READY":
             with self.lock:
                 self.status="NO_ELIGIBLE_SIGNALS"
                 self.report=report
+                self.research_report=research
+                self.entry_watchlist=False
             return False
         with self.lock:
-            if self.report:
+            if self.entry_watchlist and self.report:
                 prior={row["symbol"]:row["side"] for row in self.report.get("signals",[])}
                 current={row["symbol"]:row["side"] for row in report.get("signals",[])}
                 if any(current.get(symbol)!=side for symbol,side in prior.items()):
                     raise RuntimeError("Session signals were removed or changed direction")
             self.report=report
+            self.research_report=research
             self.report_sha=sha
-            self.status="SIGNALS_VERIFIED"
+            self.entry_watchlist=eligible
+            self.status="SIGNALS_VERIFIED" if eligible else "LATE_RESEARCH_ONLY"
         return True
 
     def _authenticate(self):
@@ -269,80 +322,88 @@ class LiveSupervisor:
             self.dhan_ids=dhan_ids
             self.kotak_ids=kotak
 
+    def _map_late_research(self,now):
+        if not self.entry_watchlist or not self.research_report:
+            return
+        missing={row["symbol"] for row in self.research_report["signals"]}-self.dhan_ids.keys()
+        missing-=self.research_dhan_ids.keys()
+        if not missing:
+            return
+        try:
+            master=self.master_fetch(missing,now=now)
+            ids=master.security_ids
+            combined={**self.dhan_ids,**self.research_dhan_ids,**ids}
+            if (master.session_date!=now.date().isoformat() or set(ids)!=missing or
+                    len(set(combined.values()))!=len(combined)):
+                raise RuntimeError("Late research Dhan mappings are incomplete or ambiguous")
+        except Exception as exc:
+            LOG.warning("Late research Dhan mapping unavailable (%s)",type(exc).__name__)
+            return
+        with self.lock:
+            self.research_dhan_ids.update(ids)
+
     def _build_runtime(self):
         now=self.now()
-        # Outside the entry window, map new signals but do not start ORB/feed.
-        # An existing runtime stays alive for its EOD position management.
-        if (now.weekday()>=5 or now.time()<START or
-                now.time()>=self.policy.entry_cutoff):
+        if (not self.entry_watchlist or now.weekday()>=5 or
+                not FEED_WARMUP<=now.time()<self.policy.entry_cutoff):
             return
         if self.runtime:
-            self._extend_runtime()
+            self.status="MONITORING_LIVE"
             return
-        if self.ticker:
-            if self.broker is None:
-                return
-            self.ticker.stop()
-            self.ticker=None
-        if not self.dhan or not self.dhan.token:
-            self.status="DHAN_AUTHENTICATING"
+        if self.ticker is None:
+            ticker=self.ticker_factory(self.dhan,self.dhan_ids,self.on_tick)
+            ticker.start()
+            self.ticker=ticker
+            self.ticker_symbols=set(self.dhan_ids)
+        else:
+            missing=set(self.dhan_ids)-self.ticker_symbols
+            if missing:
+                self.ticker.add_symbols({symbol:self.dhan_ids[symbol] for symbol in missing})
+                self.ticker_symbols.update(missing)
+        if now.time()<START:
+            self.status="WARMING_DHAN_FEED"
             return
         if self.policy.timestamp_mode not in {"start","end"}:
             raise RuntimeError("Dhan 09:15 candle timestamp mode not yet verified")
-        candidates=self.report["signals"]
-        self._map_instruments(now)
-        opening={}
-        for symbol,id_ in self.dhan_ids.items():
-            opening[symbol]=opening_range(self.dhan,id_,now.date(),
-                                           timestamp_mode=self.policy.timestamp_mode)
-        kotak={}
+
+        pending=self._pending_opening_ranges
+        for symbol,security_id in self.dhan_ids.items():
+            if symbol in pending:
+                continue
+            try:
+                pending[symbol]=opening_range(self.dhan,security_id,now.date(),
+                                              timestamp_mode=self.policy.timestamp_mode)
+            except Exception as exc:
+                self.status="WAITING_FOR_OPENING_CANDLE"
+                LOG.info("Dhan opening candle unavailable for %s (%s)",symbol,type(exc).__name__)
+                return
+        opening=dict(pending)
         runtime=None
         if self.broker is not None:
-            kotak=dict(self.kotak_ids)
             runtime=LiveRuntime(
-                session_date=now.date(),signals=candidates,dhan_ids=self.dhan_ids,
-                kotak_instruments=kotak,opening_ranges=opening,
+                session_date=now.date(),signals=self.report["signals"],dhan_ids=self.dhan_ids,
+                kotak_instruments=self.kotak_ids,opening_ranges=opening,
                 policy=self.policy,ledger=self.ledger,broker=self.broker,
                 enabled=False,clock=self.now)
-        ticker=self.ticker_factory(self.dhan,self.dhan_ids,self.on_tick)
         with self.lock:
-            self.runtime=runtime
-            self.ticker=ticker
-            self.kotak_ids=kotak
+            received_at=self.now()
+            for symbol in opening:
+                quote=self.quote_data.get(symbol,{})
+                if "tick_at" not in quote:
+                    continue
+                tick_at=datetime.fromisoformat(quote["tick_at"])
+                if not timedelta(0)<=received_at-tick_at<=timedelta(seconds=5):
+                    continue
+                price=Decimal(str(quote["ltp"]))
+                if symbol not in self.opening_ranges:
+                    self._orb_previous[symbol]=price
+                    self._orb_last_tick[symbol]=tick_at
+                if runtime:
+                    runtime.previous[symbol]=price
+                    runtime.last_tick_at[symbol]=tick_at
             self.opening_ranges=opening
-            self._orb_previous={}
-            self._orb_last_tick={}
-            self.orb_events={}
+            self.runtime=runtime
             self.status="MONITORING_LIVE" if runtime else "MONITORING_DHAN_ORB_KOTAK_PENDING"
-        ticker.start()
-
-    def _extend_runtime(self):
-        """Map and monitor newly delivered candidates without restarting the feed."""
-        if not self.runtime or not self.dhan or not self.dhan.token:
-            return
-        known=set(self.runtime.signals)
-        candidates=[row for row in self.report["signals"] if row["symbol"] not in known]
-        if not candidates:
-            return
-        if self.broker is None:
-            self.status="MONITORING_DHAN_ORB_KOTAK_PENDING"
-            return
-        self._map_instruments(self.now())
-        opening={}
-        for row in candidates:
-            symbol=row["symbol"]
-            opening[symbol]=opening_range(self.dhan,self.dhan_ids[symbol],self.now().date(),
-                                           timestamp_mode=self.policy.timestamp_mode)
-        added=self.runtime.extend_signals(
-            signals=candidates,
-            dhan_ids={row["symbol"]:self.dhan_ids[row["symbol"]] for row in candidates},
-            kotak_instruments={row["symbol"]:self.kotak_ids[row["symbol"]] for row in candidates},
-            opening_ranges=opening)
-        self.opening_ranges.update(opening)
-        if added and self.ticker:
-            if not hasattr(self.ticker,"add_symbols"):
-                raise RuntimeError("The active Dhan ticker cannot subscribe new symbols")
-            self.ticker.add_symbols({symbol:self.dhan_ids[symbol] for symbol in added})
 
     def _broker_cash(self):
         response=self.broker.limits()  # kotakneoapi v3: all segments, no arguments
@@ -445,7 +506,7 @@ class LiveSupervisor:
         with self.lock:
             for symbol,quote in result.items():
                 old=self.quote_data.get(symbol,{})
-                self.quote_data[symbol]={**old,**quote}
+                self.quote_data[symbol]={**old,**{key:value for key,value in quote.items() if key!="ltp"}}
             self.last_ohlc_at=now
 
     def on_tick(self,tick):
@@ -514,7 +575,7 @@ class LiveSupervisor:
     def _readiness_blockers_locked(self,now):
         blocked=[]
         if not self.allowed:blocked.append("SERVER_ORDERS_DISABLED")
-        if not self.report or self.report["status"]!="READY":blocked.append("CURRENT_SESSION_SIGNALS")
+        if not self.entry_watchlist:blocked.append("CURRENT_SESSION_SIGNALS")
         if not self.broker or (self.kotak_auth and self.kotak_auth.snapshot()["state"]!="AUTHENTICATED"):
             blocked.append("KOTAK_AUTHENTICATION")
         if not self.dhan or not getattr(self.dhan,"token","") or (
@@ -530,7 +591,7 @@ class LiveSupervisor:
             blocked.append("FRESH_QUOTES")
         if self.last_book_at is None or not timedelta(0)<=now-self.last_book_at<=BOOK_EXPIRY:
             blocked.append("BROKER_BOOKS")
-        if not time(9,17)<=now.time()<self.policy.entry_cutoff or now.weekday()>=5:
+        if not START<=now.time()<self.policy.entry_cutoff or now.weekday()>=5:
             blocked.append("MARKET_ENTRY_WINDOW")
         if not self.available_cash or Decimal(self.available_cash)<self.policy.gross_cap:blocked.append("FUNDS")
         if not self.runtime or self.runtime.errors:blocked.append("EXECUTION_RUNTIME")
@@ -641,15 +702,11 @@ class LiveSupervisor:
                 self.armed=False
                 if self.runtime:self.runtime.enabled=False
             return
-        self._refresh_vix_context(now)
         if self.ticker and hasattr(self.ticker,"refresh_authentication"):
             if self.ticker.refresh_authentication() and self.armed:
                 self.disarm("Dhan feed token refreshed; re-arming required")
         if self.position_ticker and hasattr(self.position_ticker,"refresh_authentication"):
             self.position_ticker.refresh_authentication()
-        if self.broker is not None and (self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH):
-            self.blocked_stage="BROKER_BOOKS"
-            self.refresh_broker()
         self.blocked_stage="CURRENT_SESSION_SIGNALS"
         has_report=self._load_report()
         if has_report:
@@ -658,13 +715,17 @@ class LiveSupervisor:
                 self._map_instruments(now)
                 self.blocked_stage="OPENING_RANGE_AND_FEED"
                 self._build_runtime()
-                self.poll_ohlc()
-                out_of_window=(now.time()<START or now.time()>=self.policy.entry_cutoff)
+                if self.ticker is None or self.opening_ranges:
+                    self._map_late_research(now)
+                    self.poll_ohlc()
+                out_of_window=(now.time()<FEED_WARMUP or now.time()>=self.policy.entry_cutoff)
                 if not self.runtime and out_of_window:
                     with self.lock:
                         self.status="SIGNALS_MAPPED_OFF_SESSION"
                         self.blocked_stage=None
                         self.armed=False
+                elif not self.entry_watchlist:
+                    self.blocked_stage="CURRENT_SESSION_SIGNALS"
                 else:
                     self.blocked_stage=("KOTAK_AUTHENTICATION" if not self.broker else
                                         "OPENING_RANGE_AND_FEED" if not self.runtime else None)
@@ -680,6 +741,12 @@ class LiveSupervisor:
                     if self.runtime:self.runtime.enabled=False
                     self.status="NEEDS_KOTAK_CREDENTIALS"
                     self.blocked_stage="NEEDS_KOTAK_CREDENTIALS"
+        stage=self.blocked_stage
+        if self.broker is not None and (self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH):
+            self.blocked_stage="BROKER_BOOKS"
+            self.refresh_broker()
+            self.blocked_stage=stage
+        self._refresh_vix_context(now)
         if self.armed and not self.ready():
             self.disarm("Broker or market data health degraded")
         # Entries cannot be recreated after restart without manual arming.
@@ -701,9 +768,10 @@ class LiveSupervisor:
                 self.disarm("Live supervisor safety halt")
                 LOG.exception("Supervisor error; new orders disarmed")
             now = self.now()
-            exit_at = datetime.combine(now.date(), self.policy.exit_time, tzinfo=IST)
-            seconds_until_exit = (exit_at - now).total_seconds()
-            self.stop_event.wait(min(3, seconds_until_exit) if seconds_until_exit > 0 else 3)
+            boundaries=(FEED_WARMUP, WATCHLIST_LOCK, START, self.policy.exit_time)
+            waits=[(datetime.combine(now.date(), at, tzinfo=IST)-now).total_seconds()
+                   for at in boundaries if at>now.time()]
+            self.stop_event.wait(min([3, *waits]))
 
     def stop(self):
         self.stop_event.set()
@@ -719,7 +787,10 @@ class LiveSupervisor:
     def snapshot(self):
         now=self.now()
         with self.lock:
-            signals=self.report["signals"] if self.report and self.report["status"]=="READY" else []
+            entry_symbols={row["symbol"] for row in self.report["signals"]} if self.entry_watchlist else set()
+            research=self.research_report or self.report
+            signals=[{**row,"entry_eligible":row["symbol"] in entry_symbols}
+                     for row in research.get("signals",[])] if research else []
             quotes=dict(self.quote_data)
             positions=list(self.broker_positions)
             fresh_quotes={symbol:q for symbol,q in quotes.items() if q.get("tick_at") and
@@ -733,6 +804,8 @@ class LiveSupervisor:
             fills=list(self.broker_fills)
             ticker=self.ticker.snapshot() if self.ticker else {"state":"NOT_STARTED"}
             monitoring=self._health_check_locked(now)
+            intents=self.ledger.snapshot(now.date())
+            trades=build_trade_journal(intents,[],[])["trades"]
             result={
                 "mode":"LIVE_KOTAK_NEO_ONLY","server_time":now.isoformat(),
                 "supervisor_status":self.status,
@@ -740,16 +813,20 @@ class LiveSupervisor:
                 "session_date":now.date().isoformat(),
                 "signal_status":self.report["status"] if self.report else "UNAVAILABLE",
                 "signals":signals,
+                "watchlist_locked":now.time()>=WATCHLIST_LOCK,
+                "watchlist_eligible":self.entry_watchlist,
                 "instrument_mappings":[{
                     "symbol":symbol,
-                    "dhan_security_id":self.dhan_ids.get(symbol),
+                    "dhan_security_id":self.dhan_ids.get(symbol) or self.research_dhan_ids.get(symbol),
                     "kotak_trading_symbol":self.kotak_ids[symbol].trading_symbol if symbol in self.kotak_ids else None,
                     "kotak_token":self.kotak_ids[symbol].token if symbol in self.kotak_ids else None,
-                    "status":"READY" if symbol in self.dhan_ids and symbol in self.kotak_ids else
+                    "status":"RESEARCH_ONLY" if symbol not in entry_symbols else
+                            "READY" if symbol in self.dhan_ids and symbol in self.kotak_ids else
                             "DHAN_READY_KOTAK_PENDING" if symbol in self.dhan_ids else "UNAVAILABLE"
                 } for symbol in sorted({row["symbol"] for row in signals})],
                 "orb_monitor":{
-                    "state":"MONITORING" if self.ticker and self.opening_ranges else "NOT_STARTED",
+                    "state":"MONITORING" if self.ticker and self.opening_ranges else
+                            "WARMING" if self.ticker else "NOT_STARTED",
                     "opening_ranges":[{"symbol":symbol,"high":str(values[0]),"low":str(values[1])}
                                       for symbol,values in sorted(self.opening_ranges.items())],
                     "breakouts":list(self.orb_events.values()),
@@ -779,7 +856,8 @@ class LiveSupervisor:
                             "max_positions":self.policy.max_positions,
                             "tick_stop_pct":None},
                 "positions":positions,"orders":orders,"fills":fills,
-                "intents":self.ledger.snapshot(now.date()),
+                "intents":intents,
+                "closed_trades":[row for row in trades if row["status"]=="CLOSED"],
                 "error":self.error,"runtime_errors":self.runtime.errors[-10:] if self.runtime else [],
                 "quotes":{symbol:{**q,"fresh":bool(
                     (symbol=="INDIAVIX" and q.get("ohlc_at") and

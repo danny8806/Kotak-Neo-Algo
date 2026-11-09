@@ -31,9 +31,11 @@ function showView(){
  try{localStorage.setItem("kotak-desk-view",id);}catch{}closeMenu();if(current)renderActive();if(id==="journal")loadJournal();
 }
 function gates(s,all=false){
- const blocked=new Set(s.readiness_blockers||[]),keys=all?Object.keys(GATES):["CURRENT_SESSION_SIGNALS","KOTAK_AUTHENTICATION","DHAN_AUTHENTICATION","MARKET_FEED","FUNDS","SERVER_ORDERS_DISABLED"],target=$(all?"allGates":"overviewGates");
+ const blocked=new Set(s.readiness_blockers||[]),target=$(all?"allGates":"overviewGates");
+ const ordered=[...blocked,...Object.keys(GATES).filter(key=>!blocked.has(key))];
+ const keys=all?ordered:ordered.slice(0,5);
  if(!changed(target.id,[keys,[...blocked]]))return;const fragment=document.createDocumentFragment();
- for(const key of keys){const [label,view]=GATES[key],isBlocked=blocked.has(key),link=el("a",null,"gate-row");link.href="#"+view;const name=el("span",null,"gate-name");name.append(el("i",isBlocked?"·":"✓","check-indicator"+(isBlocked?" blocked":"")),el("span",label));link.append(name,el("span",isBlocked?"Needs attention":"Verified","gate-state"+(isBlocked?" blocked":"")));fragment.append(link);}target.replaceChildren(fragment);
+ for(const key of keys){const [label,view]=GATES[key]||[human(key),"connections"],isBlocked=blocked.has(key),link=el("a",null,"gate-row");link.href="#"+view;const name=el("span",null,"gate-name");name.append(el("i",isBlocked?"!":"✓","check-indicator"+(isBlocked?" blocked":"")),el("span",label));link.append(name,el("span",isBlocked?"Blocked":"Verified","gate-state"+(isBlocked?" blocked":"")));fragment.append(link);}target.replaceChildren(fragment);
 }
 function services(s){
  const dhan=s.dhan_authentication||{},kotak=s.kotak_authentication||{};
@@ -43,7 +45,54 @@ function renderServices(s){
  const items=services(s);if(changed("overviewConnections",items)){const f=document.createDocumentFragment();for(const item of items.slice(0,3)){const r=el("div",null,"connection-row"),copy=el("div",null,"service-copy");copy.append(el("strong",item.name),el("small",item.detail));r.append(el("span",item.mark,"service-logo"),copy,el("span",human(item.state),"status-text"+(item.ok?" positive":"")));f.append(r);}$("overviewConnections").replaceChildren(f);}
  if(activeView==="connections"&&changed("connectionCards",items)){const f=document.createDocumentFragment();for(const item of items){const card=el("article",null,"connection-card");card.append(el("span",item.name),el("strong",human(item.state),item.ok?"positive":""),el("small",item.detail));f.append(card);}$("connectionCards").replaceChildren(f);}
 }
-function tradingWindow(raw){if(!raw)return "—";const parts=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit",weekday:"short",hour12:false}).formatToParts(new Date(raw)),p=Object.fromEntries(parts.map(x=>[x.type,x.value])),minutes=Number(p.hour)*60+Number(p.minute);return !["Sat","Sun"].includes(p.weekday)&&minutes>=555&&minutes<930?"Trading hours":"Outside trading hours";}
+const exchangeClock=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"});
+function exchangeTime(raw){
+ const at=Date.parse(raw);
+ return Number.isFinite(at)?exchangeClock.format(at):null;
+}
+function sessionBanner(title,detail,tone,view,label){
+ $("notice").dataset.tone=tone;
+ text("noticeTitle",title);text("noticeDetail",detail);
+ $("noticeAction").href="#"+view;
+ text("noticeAction",label+" →");
+}
+function renderSessionStatus(s){
+ const blockers=new Set(s.readiness_blockers||[]),strategy=s.strategy||{};
+ const cutoff=strategy.entry_cutoff?.slice(0,5),squareOff=strategy.exit_time?.slice(0,5);
+ const now=exchangeTime(s.server_time),pastCutoff=Boolean(now&&cutoff&&now.slice(0,5)>=cutoff);
+ const primary=["PRIOR_SESSION_RECOVERY","SERVER_ORDERS_DISABLED","MARKET_ENTRY_WINDOW"]
+  .find(key=>blockers.has(key))||[...blockers][0]||s.blocked_stage;
+ const [reason,view]=GATES[primary]||[primary?human(primary):"Waiting for session checks","connections"];
+ const entryState=!now||!cutoff?"Window unavailable":pastCutoff?"Cutoff passed":
+  blockers.has("MARKET_ENTRY_WINDOW")?"Outside entry window":"Before entry cutoff";
+ text("sessionCutoff",cutoff);text("squareOffTime",squareOff);
+ text("entryWindowState",entryState);text("tradingWindow",entryState);
+ const bookAt=exchangeTime(s.broker_books_updated_at);
+ text("bookFreshness",s.broker_connected?"Current":bookAt?"Stale":"Unavailable");
+ text("bookLastSync",bookAt?"Last sync "+bookAt+" IST":"No broker sync yet");
+ const tickAt=exchangeTime(s.market_feed?.last_exchange_trade_at);
+ const tickCurrent=s.market_feed?.state==="CONNECTED"&&!s.market_feed.error&&!blockers.has("FRESH_QUOTES")&&tickAt;
+ text("tickFreshness",tickCurrent?"Current":tickAt?"Stale":"Unavailable");
+ text("tickLastTrade",tickAt?"Last trade "+tickAt+" IST":"No exchange tick yet");
+ text("risk",s.readiness?"READY":"BLOCKED");
+ $("risk").className="value status-value "+(s.readiness?"positive":"");
+ text("riskReason",s.readiness?"All entry prerequisites verified":reason);
+ if(s.armed&&s.readiness){
+  sessionBanner("Live entries armed","The terminal can send real Kotak orders when a breakout qualifies.","armed","settings","Order controls");
+ }else if(s.readiness){
+  sessionBanner("Ready to arm","Entry checks passed. Operator authorization is required to start live entries.","ready","settings","Order controls");
+ }else{
+  const notes={
+   SERVER_ORDERS_DISABLED:"Server order permission is off.",
+   MARKET_ENTRY_WINDOW:pastCutoff?"The "+cutoff+" IST entry cutoff has passed.":"The configured entry window is closed.",
+   PRIOR_SESSION_RECOVERY:"Earlier broker orders or positions need reconciliation."
+  };
+  const count=blockers.size>1?" "+blockers.size+" checks are blocking entries.":"";
+  const links={settings:"View settings",signals:"View signals",market:"View market data"};
+  sessionBanner(s.armed?"Armed · entries blocked":"Live entries blocked",
+   (notes[primary]||reason+".")+count,"blocked",view,links[view]||"View checks");
+ }
+}
 function valuesForSettings(){const s=current?.strategy||{};return {settingAllocation:s.allocation_per_position,settingMaxPositions:s.max_positions,settingGross:s.gross_cap,settingMaxLong:s.max_long,settingMaxShort:s.max_short,settingCutoff:s.entry_cutoff,settingExit:s.exit_time};}
 function syncSettings(){if(!settingsDirty)for(const [id,value] of Object.entries(valuesForSettings()))if(value!==undefined)$(id).value=value;const allowed=current&&!current.armed;for(const id of Object.keys(valuesForSettings()))$(id).disabled=!allowed;$("saveSettings").disabled=!allowed||!settingsDirty;$("resetSettings").disabled=!settingsDirty;$("unsavedDot").hidden=!settingsDirty;pill("settingsState",current?.armed?"ARMED · LOCKED":settingsDirty?"UNSAVED CHANGES":"DISARMED · EDITABLE",settingsDirty?"amber":"");}
 function render(s){
@@ -51,12 +100,10 @@ function render(s){
  const serverAt=Date.parse(s.server_time)||0;if(serverAt&&serverAt<lastServerTime)return;lastServerTime=serverAt;lastStateReceipt=Date.now();current=s;stateStale=false;document.querySelector(".view-container").classList.remove("is-stale");
  const signals=s.signals||[],positions=s.positions||[],feed=s.market_feed?.state||"NOT_STARTED";
  metric("mtm",s.pnl?.gross_total??null);metric("realizedPnl",s.pnl?.gross_realized??null);metric("unrealizedPnl",s.pnl?.gross_unrealized??null);metric("netPnl",s.pnl?.net_after_fees??null);
- text("funds",money(s.available_cash));text("posCount",s.broker_connected?positions.filter(p=>Number(p.net_quantity)!==0).length:null);text("session",s.session_date);text("count",signals.length);text("navSignalCount",signals.length);text("contextExit",String(s.strategy?.exit_time||"15:15").slice(0,5));
+ text("funds",money(s.available_cash));text("posCount",s.broker_connected?positions.filter(p=>Number(p.net_quantity)!==0).length:null);text("session",s.session_date);text("count",signals.length);text("navSignalCount",signals.length);
  const vix=s.quotes?.INDIAVIX||{};text("vix",vix.fresh?fmt(vix.ltp):null);text("vixAsOf",vix.fresh?"India VIX · Dhan index quote at "+stamp(vix.ohlc_at)+" IST":"India VIX is unavailable. It is context, not an entry trigger.");
  pill("mode",s.armed?"ORDERS ARMED":"ORDERS DISARMED",s.armed?"red":"");pill("source",human(s.signal_status||"UNAVAILABLE"),s.signal_status==="READY"?"green":"amber");pill("connection",s.broker_connected?"KOTAK CONNECTED":"KOTAK DISCONNECTED",s.broker_connected?"green":"red");pill("gate",s.armed?"ARMED":"DISARMED",s.armed?"red":"");pill("cutoff","Research cutoff: "+stamp(s.research_cutoff_at)+" IST");pill("feedBadge",human(feed),feed==="CONNECTED"?"green":"amber");
- text("risk",s.readiness?"READY":"BLOCKED");$("risk").className="value status-value "+(s.readiness?"positive":"");text("riskReason",s.readiness?"All entry prerequisites verified":GATES[s.blocked_stage]?.[0]||human(s.blocked_stage||s.supervisor_status));
- const blockers=s.readiness_blockers||[],passed=Object.keys(GATES).length-blockers.filter(k=>GATES[k]).length;text("gateSummary",passed+" of "+Object.keys(GATES).length+" prerequisites verified");text("allGateSummary",s.readiness?"All entry checks passed":blockers.length+" checks need attention before new entries");gates(s);text("tradingWindow",tradingWindow(s.server_time));
- const notice=$("notice");notice.className="notice"+(s.armed?" error":s.readiness?" ok":"");notice.textContent=s.armed?"Orders are armed. Actual Kotak submissions are permitted by the session gates.":s.readiness?"All prerequisites passed. The session remains disarmed until operator authorization.":"Monitoring is live. New entries are locked · "+(GATES[s.blocked_stage]?.[0]||human(s.blocked_stage||"SESSION_PREREQUISITES"))+".";
+ const blockers=s.readiness_blockers||[],passed=Object.keys(GATES).length-blockers.filter(k=>GATES[k]).length;text("gateSummary",passed+" of "+Object.keys(GATES).length+" prerequisites verified");text("allGateSummary",s.readiness?"All entry checks passed":blockers.length+" checks need attention before new entries");gates(s);renderSessionStatus(s);
  text("policy","09:15 one-minute opening range. New-entry cutoff "+safeText(s.strategy?.entry_cutoff)+"; square-off "+safeText(s.strategy?.exit_time)+" IST. Up to "+safeText(s.strategy?.max_long)+" LONG / "+safeText(s.strategy?.max_short)+" SHORT, "+safeText(s.strategy?.max_positions)+" total positions. Allocation "+money(s.strategy?.allocation_per_position)+" per stock; gross cap "+money(s.strategy?.gross_cap)+".");
  text("armNotice",!s.orders_permitted_by_server?"Server order permission is off. Account monitoring remains read-only.":s.armed?"This session is armed for actual Kotak orders.":s.readiness?"Prerequisites passed. Operator authorization and TOTP are required.":"Order authorization is locked until all prerequisites pass.");
  $("arm").disabled=!(s.orders_permitted_by_server===true&&s.readiness===true&&!s.armed);$("disarm").disabled=!s.armed;syncSettings();
@@ -84,11 +131,27 @@ function openDetail(kind,item){
  const list=el("dl",null,"detail-list");for(const [key,value] of Object.entries({...item,snapshot_time:current?.server_time})){const group=el("div");group.append(el("dt",human(key)),el("dd",typeof value==="object"&&value!==null?JSON.stringify(value):safeText(value)));list.append(group);}$("detailContent").replaceChildren(list);$("detailDialog").showModal();
 }
 function renderPositions(){
+ const pnl=current.pnl||{};
+ metric("positionTotalPnl",pnl.gross_total??null);
+ metric("positionRealizedPnl",pnl.gross_realized??null);
+ metric("positionUnrealizedPnl",pnl.gross_unrealized??null);
+ text("positionOpenCount",current.broker_connected?(current.positions||[]).filter(p=>Number(p.net_quantity)!==0).length:null);
+ renderPositionClosures();
  const all=filtered("positions"),rows=paginate("positions",all);text("positionResultCount",all.length+" positions");text("positionsAsOf","Broker book: "+stamp(current.broker_books_updated_at)+" IST");
  if(!changed("positions",[rows,current.broker_books_updated_at]))return;const f=document.createDocumentFragment();
  if(!rows.length)f.append(emptyRow(8,current.broker_connected?"No NSE cash positions match this view.":"Live broker positions are unavailable."));
  for(const p of rows){const name=td(null),b=el("button",p.symbol,"stock-button");b.addEventListener("click",()=>openDetail("position",p));name.append(b,el("small",p.side||"FLAT","side "+(p.side==="LONG"?"long":"short")));const r=row(name,td(fmt(p.net_quantity,0),"numeric"),td(money(p.ltp),"numeric"),td(money(p.realized_gross),"numeric "+tone(p.realized_gross)),td(money(p.unrealized_gross),"numeric "+tone(p.unrealized_gross)),td(money(p.gross_mark_to_market),"numeric "+tone(p.gross_mark_to_market)),td(human(p.pnl_status)),td(null));r.classList.add("interactive-row");r.addEventListener("click",e=>{if(!e.target.closest("button,a"))openDetail("position",p);});r.lastChild.append(detailButton("position",p));f.append(r);}
  $("positionBody").replaceChildren(f);
+}
+function renderPositionClosures(){
+ const trades=current.closed_trades||[];
+ text("positionClosedAsOf",trades.length+" confirmed closed · updated "+stamp(current.server_time)+" IST");
+ if(!changed("positionClosures",trades))return;
+ const rows=document.createDocumentFragment();
+ if(!trades.length)rows.append(emptyRow(6,"No fully closed ORB trades for this session."));
+ for(const t of trades)rows.append(row(td(t.symbol,"code"),td(t.direction,"side "+(t.direction==="LONG"?"long":"short")),
+  td(fmt(t.exit_quantity,0),"numeric"),td(money(t.entry_average_price),"numeric"),td(money(t.exit_average_price),"numeric"),td(money(t.realized_gross),"numeric "+tone(t.realized_gross))));
+ $("positionClosedBody").replaceChildren(rows);
 }
 function renderBook(kind){
  const all=filtered(kind),rows=paginate(kind,all),orders=kind==="orders",target=$(orders?"orderBody":"fillBody");text(orders?"orderCount":"fillCount",all.length+" "+(orders?"broker orders":"confirmed fills"));if(!changed(kind,rows))return;
@@ -99,7 +162,7 @@ function renderSignals(){
  const q=query("signalSearch"),signals=(current.signals||[]).filter(s=>s.symbol.toLowerCase().includes(q)&&(signalFilter==="all"||s.side===signalFilter)).sort((a,b)=>(a.side||"").localeCompare(b.side||"")||(a.rank||0)-(b.rank||0));
  text("signalResultCount",signals.length+" stocks");const data=signals.map(s=>[s,current.quotes?.[s.symbol]||{}]);
  if(changed("signals",data)){const f=document.createDocumentFragment();if(!signals.length)f.append(emptyRow(6,(current.signals||[]).length?"No candidates match these filters.":"No current-session verified news signals. New entries remain locked."));
- for(const s of signals){const quote=current.quotes?.[s.symbol]||{},price=quote.fresh?quote.ltp:null,opened=quote.open||null,change=price!==null&&opened?100*(price-opened)/opened:null,stock=td(null),b=el("button",s.symbol,"stock-button");b.addEventListener("click",()=>{selectedSymbol=s.symbol;renderEvidence();});stock.append(b);f.append(row(td(s.rank),stock,td(s.side,"side "+(s.side==="LONG"?"long":"short")),td(money(price),"numeric"),td(money(opened),"numeric"),td(change===null?"—":(change>=0?"+":"")+fmt(change)+"%","numeric "+tone(change))));}$("signalBody").replaceChildren(f);}
+ for(const s of signals){const quote=current.quotes?.[s.symbol]||{},price=quote.fresh?quote.ltp:null,opened=quote.open||null,change=price!==null&&opened?100*(price-opened)/opened:null,stock=td(null),b=el("button",s.symbol,"stock-button");b.addEventListener("click",()=>{selectedSymbol=s.symbol;renderEvidence();});stock.append(b);if(s.entry_eligible===false)stock.append(el("small","Research only","muted"));f.append(row(td(s.rank),stock,td(s.side,"side "+(s.side==="LONG"?"long":"short")),td(money(price),"numeric"),td(money(opened),"numeric"),td(change===null?"—":(change>=0?"+":"")+fmt(change)+"%","numeric "+tone(change))));}$("signalBody").replaceChildren(f);}
  if(!selectedSymbol||(current.signals||[]).every(s=>s.symbol!==selectedSymbol))selectedSymbol=signals[0]?.symbol||null;renderEvidence();
 }
 function renderEvidence(){
@@ -112,7 +175,7 @@ function renderMarket(){
  $("orbPanel").hidden=marketTab!=="orb";$("mappingPanel").hidden=marketTab!=="mapping";
  if(marketTab==="mapping"){const rows=filtered("mapping"),all=current.instrument_mappings||[];text("mappingInfo",all.length?all.filter(r=>r.dhan_security_id).length+" / "+all.length+" Dhan IDs · "+all.filter(r=>r.kotak_token&&r.kotak_trading_symbol).length+" / "+all.length+" Kotak mappings":"Waiting for today's verified research report.");if(!changed("mapping",rows))return;const f=document.createDocumentFragment();if(!rows.length)f.append(emptyRow(5,"Exact mappings appear after current-session candidates are verified."));for(const m of rows)f.append(row(td(m.symbol,"code"),td(m.dhan_security_id||"—","code"),td(m.kotak_trading_symbol||"—","code"),td(m.kotak_token||"—","code"),td(human(m.status))));$("mappingBody").replaceChildren(f);return;}
  const orb=current.orb_monitor||{},ranges=(orb.opening_ranges||[]).filter(r=>r.symbol.toLowerCase().includes(query("marketSearch"))),data=ranges.map(r=>[r,current.quotes?.[r.symbol],(orb.breakouts||[]).find(b=>b.symbol===r.symbol)]);
- text("orbInfo",orb.state==="MONITORING"?orb.order_submission_enabled?"Fresh ticks monitored · order gate armed separately":"Live tick monitoring · order gate remains disarmed":"Waiting for verified signals and a completed opening candle.");if(!changed("orb",data))return;const f=document.createDocumentFragment();if(!ranges.length)f.append(emptyRow(6,"No opening-range monitor matches this view."));
+ text("orbInfo",orb.state==="MONITORING"?orb.order_submission_enabled?"Fresh ticks monitored · order gate armed separately":"Live tick monitoring · order gate remains disarmed":orb.state==="WARMING"?"Dhan feed warming · waiting for the 09:15–09:16 candle.":"Waiting for verified signals and a completed opening candle.");if(!changed("orb",data))return;const f=document.createDocumentFragment();if(!ranges.length)f.append(emptyRow(6,"No opening-range monitor matches this view."));
  for(const range of ranges){const signal=(current.signals||[]).find(s=>s.symbol===range.symbol)||{},quote=current.quotes?.[range.symbol]||{},event=(orb.breakouts||[]).find(e=>e.symbol===range.symbol);f.append(row(td(range.symbol,"code"),td(signal.side||"—"),td(range.high,"numeric"),td(range.low,"numeric"),td(quote.fresh?money(quote.ltp):"—","numeric"),td(event?"Observed · "+stamp(event.triggered_at):"Waiting for cross",event?"positive":"")));}$("orbBody").replaceChildren(f);
 }
 function renderActive(){if(!current||stateStale)return;if(activeView==="signals")renderSignals();else if(activeView==="positions")renderPositions();else if(activeView==="orders"||activeView==="fills")renderBook(activeView);else if(activeView==="journal")renderJournal();else if(activeView==="market")renderMarket();else if(activeView==="connections"){gates(current,true);renderServices(current);}}
@@ -124,8 +187,16 @@ function renderJournal(){const data=journalData;if(!data){for(const id of ["jour
  const fills=data.fills||[];text("journalFillCount",fills.length+" persisted fills");if(changed("journalFills",fills)){const f=document.createDocumentFragment();if(!fills.length)f.append(emptyRow(7,"No broker fills have been persisted yet."));for(const fill of fills)f.append(row(td(stamp(fill.broker_time||fill.first_seen_at)),td(fill.trading_symbol||fill.symbol,"code"),td(fill.side||"—"),td(fmt(fill.quantity,0),"numeric"),td(money(fill.price),"numeric"),td(fill.broker_fill_id||"—","code"),td(fill.broker_order_id||"—","code")));$("journalFillBody").replaceChildren(f);}}
 function disconnected(message){
  stateStale=true;document.querySelector(".view-container").classList.add("is-stale");
- pill("connection","DISCONNECTED","red");$("arm").disabled=true;$("saveSettings").disabled=true;for(const id of ["funds","posCount","mtm","realizedPnl","unrealizedPnl","netPnl"])text(id,null);
- $("positionBody").replaceChildren(emptyRow(8,"Live account data unavailable. Reconnecting."));renderCache.clear();text("notice",message);$("notice").className="notice error";text("streamLabel","Connection interrupted");$("streamDot").className="status-dot";
+ pill("connection","DISCONNECTED","red");$("arm").disabled=true;$("saveSettings").disabled=true;for(const id of ["funds","posCount","mtm","realizedPnl","unrealizedPnl","netPnl","positionTotalPnl","positionRealizedPnl","positionUnrealizedPnl","positionOpenCount"])text(id,null);
+ $("positionBody").replaceChildren(emptyRow(8,"Live account data unavailable. Reconnecting."));
+ text("positionClosedAsOf","Trade status unavailable");
+ $("positionClosedBody").replaceChildren(emptyRow(6,"Waiting for the session state to reconnect."));
+ renderCache.clear();
+ sessionBanner("Live status unavailable",message,"blocked","connections","View checks");
+ text("entryWindowState","Status unavailable");text("tradingWindow","Status unavailable");
+ text("bookFreshness","Unavailable");text("bookLastSync","Waiting for sync");
+ text("tickFreshness","Unavailable");text("tickLastTrade","Waiting for feed");
+ text("streamLabel","Connection interrupted");$("streamDot").className="status-dot";
 }
 let fetchInFlight=false;
 async function getState(){if(fetchInFlight)return;fetchInFlight=true;try{const r=await fetch(route("/api/state"),{credentials:"same-origin",cache:"no-store",signal:AbortSignal.timeout(5000)});if(r.status===401){location.assign(route("/login"));return;}if(!r.ok)throw Error("HTTP "+r.status);render(await r.json());}catch{if(Date.now()-lastStateReceipt>5000)disconnected("Live data is unavailable. Reconnecting; verify your account directly with Kotak.");}finally{fetchInFlight=false;}}

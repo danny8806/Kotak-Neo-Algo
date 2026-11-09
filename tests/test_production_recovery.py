@@ -461,24 +461,30 @@ class ProductionReplayTests(unittest.TestCase):
             response=client.post('/api/v1/signals/incoming',headers={'Authorization':'Bearer '+token,
                 'Idempotency-Key':'synthetic-e2e'},json=report)
             self.assertEqual(response.status_code,200,response.text)
+            def emit(symbol, price):
+                packet=struct.pack('<BhBifi',2,16,1,int(ids[symbol]),float(price),int(now[0].timestamp()))
+                tick=parse_ticker(packet)
+                tick.update(symbol=by_id[tick["security_id"]],timestamp=datetime.fromisoformat(tick['exchange_timestamp']))
+                desk.on_tick(tick)
             desk.cycle()
             self.assertEqual(desk.dhan_ids, ids)
+            warmed_ticker=desk.ticker
+            self.assertIsNotNone(warmed_ticker)
             self.assertIsNone(desk.runtime)
+            self.assertEqual(candles, [])
             self.assertEqual(broker.calls, [])
-            now[0]=NOW;desk.cycle()
+            now[0]=NOW.replace(minute=15,second=59)
+            for symbol in ids:
+                emit(symbol, 100 if sides[symbol] == "LONG" else 95)
+            now[0]=NOW.replace(minute=16)
+            desk.cycle()
+            self.assertIs(desk.ticker, warmed_ticker)
             self.assertEqual({s: x.token for s,x in desk.kotak_ids.items()}, ids)
             self.assertEqual(set(candles), {
                 (d, NOW.replace(minute=15), NOW.replace(minute=17), "1") for d in ids.values()
             })
             self.assertEqual(desk.opening_ranges, {s: (Decimal(100), Decimal(95)) for s in ids})
             self.assertEqual(client.post('/api/auth/login',json={'password':password}).status_code,200)
-            def emit(symbol, price):
-                packet=struct.pack('<BhBifi',2,16,1,int(ids[symbol]),float(price),int(now[0].timestamp()))
-                tick=parse_ticker(packet)
-                tick.update(symbol=by_id[tick["security_id"]],timestamp=datetime.fromisoformat(tick['exchange_timestamp']))
-                desk.on_tick(tick)
-            for symbol in ids:
-                emit(symbol, 100 if sides[symbol] == "LONG" else 95)
             with patch('live_desk.app.totp_now',return_value='123456'):
                 response=client.post('/api/live/arm',headers={'Origin':'http://testserver'},json={
                     'acknowledgement':'I AUTHORIZE LIVE KOTAK ORDERS','totp':'123456'})
@@ -510,6 +516,9 @@ class ProductionReplayTests(unittest.TestCase):
             journal = client.get("/api/live/journal").json()
             self.assertEqual(len(journal["fills"]), 20)
             self.assertEqual(journal["summary"]["closed_trade_count"], 10)
+            dashboard=client.get("/api/state").json()
+            self.assertEqual({row["symbol"]:row for row in dashboard["closed_trades"]},
+                             {row["symbol"]:row for row in journal["trades"]})
             self.assertEqual(journal["summary"]["open_trade_count"], 0)
             self.assertEqual(journal["summary"]["gross_realized_from_exits"], 20530)
             self.assertEqual(journal["summary"]["closed_trade_return_pct"], 2.05)

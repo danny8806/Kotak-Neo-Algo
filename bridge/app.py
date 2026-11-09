@@ -101,6 +101,11 @@ def create_app(*, database_url: str | None = None, bearer_token: str | None = No
             connection.execute(text(
                 "SELECT pg_advisory_xact_lock(hashtext('signal-ingest'), hashtext(:day))"
             ), {"day": payload["session_date"]})
+            # The executable watchlist uses server receipt time. Sample it
+            # after the lock so a queued request cannot be backdated.
+            current = clock().astimezone(IST)
+            if payload["session_date"] != current.date().isoformat():
+                raise HTTPException(status_code=422, detail="Session date changed while accepting report")
             existing_batch = connection.execute(select(signal_batches).where(
                 signal_batches.c.idempotency_key == idempotency_key)).mappings().first()
             if existing_batch:

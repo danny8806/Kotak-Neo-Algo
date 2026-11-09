@@ -26,7 +26,13 @@
 <header class="topbar"><div class="breadcrumb"><button class="icon-button mobile-menu" id="menuToggle" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">☰</button><span class="desk-label">Trading workspace</span><span class="breadcrumb-divider">/</span><strong id="viewTitle">Overview</strong></div><div class="topbar-actions"><span id="liveClock" class="clock">— IST</span><span class="pill" id="mode">ORDERS DISARMED</span><button class="quiet-button" id="logout">Sign out <span aria-hidden="true">↗</span></button></div></header>
 <main id="workspace" tabindex="-1">
 <div class="page-heading"><div><p class="eyebrow" id="viewEyebrow">YOUR SESSION AT A GLANCE</p><h1 id="pageTitle">Session overview</h1><p id="pageDescription">A clear view of your account, execution gates, and live connections.</p></div><div class="page-heading-actions"><span class="pill" id="connection">CONNECTING</span><button class="secondary small" id="refreshState" title="Refresh live account state">↻ <span>Refresh</span></button></div></div>
-<div class="notice" id="notice" role="status">Connecting to the live desk. Order controls remain locked.</div>
+<div class="notice session-status" id="notice" data-tone="neutral">
+  <div class="session-status-copy" role="status">
+    <strong id="noticeTitle">Connecting to the live desk</strong>
+    <p id="noticeDetail">Waiting for account and market status.</p>
+  </div>
+  <a id="noticeAction" class="session-status-link" href="#connections">View checks <span aria-hidden="true">→</span></a>
+</div>
 <div class="view-container">
 <section class="view" id="view-overview" aria-label="Overview">
 <div class="overview-metrics">
@@ -36,9 +42,19 @@
 <article class="metric"><div class="metric-top"><span>Entry readiness</span><span class="metric-icon">◎</span></div><div class="value status-value" id="risk">CHECKING</div><p id="riskReason">Waiting for live checks</p><a href="#connections" class="metric-link">Inspect prerequisites <span>↗</span></a></article>
 </div>
 <div class="overview-body">
-<article class="panel pnl-panel"><div class="panel-heading"><div><h2>Profit &amp; loss</h2><p>A transparent breakdown of the session</p></div><span class="subtle-tag">GROSS</span></div><div class="pnl-total-label">SESSION BREAKDOWN</div><div class="pnl-line"><span><i class="legend-dot teal"></i>Realized P&amp;L<small>Matched broker buys and sells</small></span><strong id="realizedPnl">—</strong></div><div class="pnl-line"><span><i class="legend-dot blue"></i>Unrealized P&amp;L<small>Marked against fresh exchange ticks</small></span><strong id="unrealizedPnl">—</strong></div><div class="pnl-line net-line"><span>Net after fees<small>Awaiting authoritative broker charges</small></span><strong id="netPnl">—</strong></div><a href="#positions" class="panel-link">Open positions &amp; valuation details <span>→</span></a></article>
+<article class="panel pnl-panel"><div class="panel-heading"><div><h2>Profit &amp; loss</h2><p>A transparent breakdown of the session</p></div><span class="subtle-tag">GROSS</span></div><div class="pnl-line"><span><i class="legend-dot teal"></i>Realized P&amp;L<small>Matched broker buys and sells</small></span><strong id="realizedPnl">—</strong></div><div class="pnl-line"><span><i class="legend-dot blue"></i>Unrealized P&amp;L<small>Marked against fresh exchange ticks</small></span><strong id="unrealizedPnl">—</strong></div><div class="pnl-line net-line"><span>Net after fees<small>Awaiting authoritative broker charges</small></span><strong id="netPnl">—</strong></div><a href="#positions" class="panel-link">Open positions &amp; valuation details <span>→</span></a></article>
 <article class="panel readiness-panel"><div class="panel-heading"><div><h2>Execution prerequisites</h2><p id="gateSummary">Verifying the session</p></div><span class="pill" id="gate">DISARMED</span></div><div id="overviewGates" class="gate-list"></div><a href="#connections" class="panel-link">View every connection and check <span>→</span></a></article>
-<article class="panel session-panel"><div class="panel-heading"><div><h2>Session context</h2><p>Exchange time · Asia/Kolkata</p></div><span class="subtle-tag" id="tradingWindow">—</span></div><div class="context-grid"><div><span>Session date</span><strong id="session">—</strong></div><div><span>Research candidates</span><strong id="count">—</strong></div><div><span>India VIX</span><strong id="vix">—</strong></div><div><span>Research state</span><span class="pill" id="source">UNAVAILABLE</span></div></div><p class="context-note" id="vixAsOf">Dhan index context; not an entry trigger.</p><div class="session-times"><span><i></i><b>08:00</b>Login refresh</span><span><i></i><b>09:15</b>Opening range</span><span><i></i><b id="contextExit">15:15</b>Square-off</span></div></article>
+<article class="panel session-panel">
+  <div class="panel-heading"><div><h2>Session context</h2><p>Exchange time · Asia/Kolkata</p></div><span class="subtle-tag" id="tradingWindow">—</span></div>
+  <div class="session-strip" aria-label="Session timing and data freshness">
+    <div><span>Entry cutoff · IST</span><strong id="sessionCutoff">—</strong><small id="entryWindowState">Waiting for session</small></div>
+    <div><span>Square-off · IST</span><strong id="squareOffTime">—</strong><small>Configured exit time</small></div>
+    <div><span>Kotak account books</span><strong id="bookFreshness">—</strong><small id="bookLastSync">Waiting for sync</small></div>
+    <div><span>Dhan exchange ticks</span><strong id="tickFreshness">—</strong><small id="tickLastTrade">Waiting for feed</small></div>
+  </div>
+  <div class="context-grid"><div><span>Session date</span><strong id="session">—</strong></div><div><span>Research candidates</span><strong id="count">—</strong></div><div><span>India VIX</span><strong id="vix">—</strong></div><div><span>Research state</span><span class="pill" id="source">UNAVAILABLE</span></div></div>
+  <p class="context-note" id="vixAsOf">Dhan index context; not an entry trigger.</p>
+</article>
 <article class="panel connections-overview"><div class="panel-heading"><div><h2>Live connections</h2><p>Authentication and account freshness</p></div><a href="#connections" class="text-button">Details ↗</a></div><div id="overviewConnections" class="connection-list"></div></article>
 </div>
 </section>
@@ -52,8 +68,18 @@
 <article class="panel table-panel market-panel" id="mappingPanel" hidden><div class="panel-heading"><div><h2>Verified broker instrument mapping</h2><p id="mappingInfo">Waiting for verified candidates.</p></div><button class="secondary small" data-export="mapping">Export CSV ↗</button></div><div class="table-scroll"><table><thead><tr><th>Signal symbol</th><th>Dhan NSE ID</th><th>Kotak trading symbol</th><th>Kotak token</th><th>Status</th></tr></thead><tbody id="mappingBody"></tbody></table></div></article>
 </section>
 <section class="view" id="view-positions" aria-label="Positions and profit and loss" hidden>
+<div class="overview-metrics">
+<article class="metric"><div class="metric-top"><span>Total gross P&amp;L</span></div><div class="value" id="positionTotalPnl">—</div><p>Realized plus unrealized, before fees</p></article>
+<article class="metric"><div class="metric-top"><span>Realized gross</span></div><div class="value" id="positionRealizedPnl">—</div><p>From the Kotak position book</p></article>
+<article class="metric"><div class="metric-top"><span>Unrealized gross</span></div><div class="value" id="positionUnrealizedPnl">—</div><p>Marked to fresh Dhan ticks</p></article>
+<article class="metric"><div class="metric-top"><span>Open positions</span></div><div class="value" id="positionOpenCount">—</div><p>Nonzero Kotak NSE cash quantities</p></article>
+</div>
 <div class="workspace-toolbar"><div class="search-box"><span>⌕</span><input id="positionSearch" data-search="positions" type="search" placeholder="Search positions…" aria-label="Search positions"/></div><div class="filter-tabs" id="positionFilters"><button data-filter="all" aria-pressed="true">All positions</button><button data-filter="open" aria-pressed="false">Open</button><button data-filter="closed" aria-pressed="false">Closed</button></div><button class="secondary small" data-export="positions">Export CSV ↗</button></div>
 <article class="panel table-panel"><div class="panel-heading"><div><h2>LIVE Kotak positions</h2><p id="positionsAsOf">Waiting for the live account book.</p></div><span class="subtle-tag" id="positionResultCount">0 positions</span></div><div class="table-scroll"><table><thead><tr><th>Stock / side</th><th class="numeric">Net qty</th><th class="numeric">Live LTP</th><th class="numeric">Realized gross</th><th class="numeric">Unrealized gross</th><th class="numeric">Total gross</th><th>Valuation</th><th></th></tr></thead><tbody id="positionBody"></tbody></table></div><div class="table-note">Gross values exclude fees. Missing live quotes or unverified cost basis stay unavailable.</div><div class="pagination" id="positionsPagination"></div></article>
+<article class="panel table-panel">
+<div class="panel-heading"><div><h2>Closed ORB trades today</h2><p id="positionClosedAsOf">Loading confirmed exits…</p></div><a href="#journal" class="panel-link">Trade history <span>→</span></a></div>
+<div class="table-scroll"><table><thead><tr><th>Stock</th><th>Direction</th><th class="numeric">Closed qty</th><th class="numeric">Entry avg</th><th class="numeric">Exit avg</th><th class="numeric">Realized gross</th></tr></thead><tbody id="positionClosedBody"></tbody></table></div>
+</article>
 </section>
 <section class="view" id="view-orders" aria-label="Order book" hidden>
 <div class="workspace-toolbar"><div class="search-box"><span>⌕</span><input id="orderSearch" data-search="orders" type="search" placeholder="Search stock, order ID, or tag…" aria-label="Search orders"/></div><label class="select-label">Status<select id="orderStatus"><option value="all">All statuses</option><option value="open">Open / pending</option><option value="complete">Completed</option><option value="rejected">Rejected / cancelled</option></select></label><button class="secondary small" data-export="orders">Export CSV ↗</button></div>

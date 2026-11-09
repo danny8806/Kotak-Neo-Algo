@@ -8,7 +8,7 @@ import os
 import json
 import hashlib
 import unittest
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -278,6 +278,49 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertFalse(desk.armed)
         self.assertEqual(self.broker.order_calls,0)
 
+    def test_exact_cutoff_preserves_preopen_watchlist_on_restart(self):
+        from test_failure_cases import ready_fixture
+
+        now=[TODAY.replace(hour=9,minute=14,second=59)]
+        self.supervisor.clock=lambda:now[0]
+        self.supervisor.allowed_symbols={"TESTA","TESTB","TESTC"}
+        app=create_app(database_url=self.db_url,bearer_token=TOKEN,
+                       now_provider=lambda:now[0],allowed_symbols=self.supervisor.allowed_symbols)
+        self.addCleanup(app.state.engine.dispose)
+        with TestClient(app) as client:
+            def ingest(symbol,side):
+                report=ready_fixture(now[0].date().isoformat())
+                published_at=(now[0].date()-timedelta(days=1)).isoformat()+"T16:15:00+05:30"
+                report["signals"][0].update(symbol=symbol,side=side,first_available_at=published_at)
+                report["signals"][0]["sources"][0]["published_at"]=published_at
+                response=client.post("/api/v1/signals/incoming",json=report,headers={
+                    "Authorization":"Bearer "+TOKEN,"Idempotency-Key":"fixture-"+symbol})
+                self.assertEqual(response.status_code,200,response.text)
+                return response.json()
+
+            first=ingest("TESTA","LONG")
+            now[0]+=timedelta(seconds=1)
+            self.assertEqual(ingest("TESTB","SHORT")["status"],"ACCEPTED")
+            now[0]+=timedelta(minutes=1)
+            # Load from PostgreSQL for the first time after both reports landed.
+            self.assertTrue(self.supervisor._load_report())
+            state=self.supervisor.snapshot()
+            self.assertTrue(state["watchlist_locked"])
+            self.assertEqual(state["report_hash"],first["sha256"])
+            self.assertEqual([(s["symbol"],s["side"],s["entry_eligible"]) for s in state["signals"]],
+                             [("TESTA","LONG",True),("TESTB","SHORT",False)])
+            self.assertIsNone(self.supervisor.runtime)
+
+            now[0]+=timedelta(days=1)
+            self.supervisor._new_day(now[0].date().isoformat())
+            self.assertEqual(ingest("TESTC","LONG")["status"],"ACCEPTED")
+            self.assertTrue(self.supervisor._load_report())
+            self.supervisor._build_runtime()
+            state=self.supervisor.snapshot()
+            self.assertEqual(state["supervisor_status"],"LATE_RESEARCH_ONLY")
+            self.assertIn("CURRENT_SESSION_SIGNALS",state["readiness_blockers"])
+            self.assertIsNone(self.supervisor.ticker)
+
     def test_missing_kotak_configuration_is_quiet_and_disarmed(self):
         keys=("KOTAK_NEO_CONSUMER_KEY","KOTAK_NEO_MOBILE_NUMBER","KOTAK_NEO_UCC",
               "KOTAK_NEO_MPIN","KOTAK_NEO_TOTP_SECRET")
@@ -312,7 +355,7 @@ class LiveTerminalTests(unittest.TestCase):
         with self.bridge.state.engine.begin() as db:
             db.execute(reports.insert().values(session_date="2026-11-04",
                 idempotency_key="dhan-orb-monitor-test",sha256=hashlib.sha256(raw.encode()).hexdigest(),
-                status="READY",received_at=TODAY,original_json=raw))
+                status="READY",received_at=TODAY.replace(minute=14),original_json=raw))
 
         class Dhan:
             token="test-authenticated-token"
@@ -385,9 +428,13 @@ class LiveTerminalTests(unittest.TestCase):
         self.supervisor.dhan.get_ohlc=Mock(side_effect=[
             RuntimeError("index quote unavailable"),
             {"TESTA":{"open":100,"high":102,"low":99,"close":101,"ltp":101}}])
+        self.supervisor.on_tick({"symbol":"TESTA","ltp":103,"timestamp":TODAY})
         self.supervisor._refresh_vix_context(TODAY)
         self.supervisor.poll_ohlc()
-        self.assertEqual(self.supervisor.quote_data["TESTA"]["ltp"],101)
+        quote=self.supervisor.quote_data["TESTA"]
+        self.assertEqual(quote["open"],100)
+        self.assertEqual(quote["ltp"],103)
+        self.assertEqual(quote["tick_at"],TODAY.isoformat())
         self.assertIsNotNone(self.supervisor.last_ohlc_at)
 
     def test_live_policy_has_no_implicit_daily_loss_limit(self):

@@ -36,6 +36,14 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   const go=async name=>{await page.locator('nav [data-view="'+name+'"]').click();await page.locator('#view-'+name).waitFor({state:'visible'});assert.equal(await page.locator('.view:visible').count(),1);};
   const push=async()=>{bump();await page.evaluate(s=>window._testSocket.onmessage({data:JSON.stringify(s)}),state);};
   assert.equal(await page.locator('#realizedPnl').textContent(),'₹50.00');assert.equal(await page.locator('#unrealizedPnl').textContent(),'₹25.00');assert.equal(await page.locator('#netPnl').textContent(),'—');
+  assert.equal(await page.locator('#noticeTitle').textContent(),'Live entries blocked');
+  assert.match(await page.locator('#noticeDetail').textContent(),/Server order permission is off/);
+  assert.equal(await page.locator('#noticeAction').getAttribute('href'),'#settings');
+  assert.equal(await page.locator('#sessionCutoff').textContent(),'10:00');
+  assert.equal(await page.locator('#squareOffTime').textContent(),'15:15');
+  assert.equal(await page.locator('#bookFreshness').textContent(),'Current');
+  assert.equal(await page.locator('#tickFreshness').textContent(),'Unavailable');
+  assert.match(await page.locator('#overviewGates .gate-row').first().textContent(),/Server order permission.*Blocked/);
   assert.equal(await page.evaluate(()=>document.body.scrollHeight<=innerHeight+1),true,'The workspace must not become a long document');
   assert.equal(await page.locator('#view-overview').evaluate(n=>n.scrollHeight<=n.clientHeight+1),true,'Desktop overview should fit without scrolling');
   for(const selector of ['.pnl-panel','.readiness-panel'])assert.equal(await page.locator(selector).evaluate(n=>n.scrollHeight<=n.clientHeight+1),true,'Overview cards must not clip their contents');
@@ -45,6 +53,11 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   await page.locator('#signalSearch').fill('');await page.locator('#signalFilters [data-filter="LONG"]').click();assert.equal(await page.locator('#signalBody tr').count(),1);assert.match(await page.locator('#signalBody').textContent(),/TESTA/);
   await go('market');assert.equal(await page.locator('#orbBody tr').count(),2);await page.locator('[data-market-tab="mapping"]').click();assert.equal(await page.locator('#mappingBody tr').count(),2);await page.locator('#marketSearch').fill('TESTA');assert.equal(await page.locator('#mappingBody tr').count(),1);
   await go('positions');assert.equal(await page.locator('#positionBody td').count(),8);await page.locator('#positionBody .row-open').click();await page.locator('#detailDialog').waitFor({state:'visible'});assert.match(await page.locator('#detailContent').textContent(),/105/);await page.keyboard.press('Escape');await page.locator('#detailDialog').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#positionTotalPnl').textContent(),'₹75.00');
+  assert.equal(await page.locator('#positionOpenCount').textContent(),'1');
+  assert.match(await page.locator('#positionClosedBody').textContent(),/No fully closed ORB trades/);
+  state.closed_trades=journal.trades;await push();
+  assert.match(await page.locator('#positionClosedBody').textContent(),/TESTA.*₹25.00/);
   await page.locator('#positionFilters [data-filter="closed"]').click();assert.match(await page.locator('#positionBody').textContent(),/No NSE/);await page.locator('#positionFilters [data-filter="open"]').click();assert.equal(await page.locator('#positionBody .row-open').count(),1);
   await go('orders');assert.equal(await page.locator('#orderBody tr').count(),50);assert.match(await page.locator('#ordersPagination').textContent(),/151/);
   await page.locator('#ordersPagination [aria-label="Next page"]').focus();await push();assert.equal(await page.locator('#ordersPagination [aria-label="Next page"]').evaluate(n=>n===document.activeElement),true,'Live updates must preserve pagination focus');
@@ -59,6 +72,7 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   await page.locator('#settingAllocation').fill('125000');await page.locator('#saveSettings').click();await page.waitForFunction(()=>document.getElementById('saveSettings').disabled);assert.equal(state.strategy.allocation_per_position,125000);
   state.armed=true;await push();assert.equal(await page.locator('#settingAllocation').isDisabled(),true);assert.equal(await page.locator('#saveSettings').isDisabled(),true);state.armed=false;await push();assert.equal(await page.locator('#arm').isDisabled(),true);
   state.orders_permitted_by_server=true;state.readiness=true;state.readiness_blockers=[];await push();
+  assert.equal(await page.locator('#noticeTitle').textContent(),'Ready to arm');
   await page.locator('#arm').click();await page.locator('#armModal').waitFor({state:'visible'});
   await page.locator('#authorization').fill('TEST ONLY - DO NOT SUBMIT');await page.locator('#otp').fill('000000');await page.keyboard.press('Escape');
   await page.locator('#armModal').waitFor({state:'hidden'});await page.waitForFunction(()=>document.getElementById('otp').value==='');assert.equal(await page.locator('#otp').inputValue(),'');assert.equal(await page.locator('#authorization').inputValue(),'');
@@ -71,6 +85,8 @@ function bump(){state.server_time=new Date(Date.now()+(++revision)*1000).toISOSt
   await page.locator('#menuToggle').click();assert.equal(await page.locator('#menuToggle').getAttribute('aria-expanded'),'true');await go('orders');assert.equal(await page.locator('#menuToggle').getAttribute('aria-expanded'),'false');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.reload();await page.waitForFunction(()=>document.getElementById('view-orders').hidden===false);await page.waitForFunction(()=>document.getElementById('connection').textContent==='KOTAK CONNECTED');
   await page.evaluate(()=>window._testSocket.onmessage({data:'{invalid'}));for(const id of ['funds','posCount','mtm','realizedPnl','unrealizedPnl','netPnl'])assert.equal(await page.locator('#'+id).textContent(),'—');assert.equal(await page.locator('#arm').isDisabled(),true);
+  assert.equal(await page.locator('#noticeTitle').textContent(),'Live status unavailable');
+  assert.equal(await page.locator('#bookFreshness').textContent(),'Unavailable');
   await page.locator('#menuToggle').click();await go('positions');assert.match(await page.locator('#positionBody').textContent(),/unavailable/);
   await push();assert.equal(await page.locator('#positionBody .row-open').count(),1);
   assert.deepEqual(mutations,['/api/live/settings'],'Read-only checks and navigation must never mutate broker/signal state');assert.deepEqual(errors,[]);
