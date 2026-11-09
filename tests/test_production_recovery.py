@@ -755,7 +755,6 @@ class ProductionReplayTests(unittest.TestCase):
                 self.addCleanup(app.state.engine.dispose)
                 client=TestClient(app)
                 self.addCleanup(client.close)
-                self.assertEqual(client.post("/api/auth/login",json={"password":password}).status_code,200)
                 return desk,client
 
             desk,client=make_desk()
@@ -786,11 +785,16 @@ class ProductionReplayTests(unittest.TestCase):
                 day=start+timedelta(days=day_index)
                 now[0]=day.replace(hour=8,minute=0)
                 old_ticker=desk.ticker
+                if day_index:
+                    self.assertEqual(client.get("/api/state").status_code,401)
                 if day_index==2:
                     desk.stop()
                     desk,client=make_desk()
                 desk.cycle()
-                state=client.get("/api/state").json()
+                self.assertEqual(client.post("/api/auth/login",json={"password":password}).status_code,200)
+                response=client.get("/api/state")
+                self.assertEqual(response.status_code,200,response.text)
+                state=response.json()
                 self.assertEqual(state["session_date"],day.date().isoformat())
                 self.assertEqual((state["signals"],state["quotes"],state["intents"],state["closed_trades"]),
                                  ([],{},[],[]))

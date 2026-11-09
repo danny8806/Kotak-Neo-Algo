@@ -215,6 +215,16 @@ class LiveTerminalTests(unittest.TestCase):
         with self.client.websocket_connect("/ws", headers={"Origin":"http://testserver"}) as ws:
             self.assertEqual(ws.receive_json()["mode"], "LIVE_KOTAK_NEO_ONLY")
 
+    def test_midnight_expires_an_already_connected_dashboard_websocket(self):
+        self.login()
+        with self.client.websocket_connect("/ws",headers={"Origin":"http://testserver"}) as ws:
+            self.assertEqual(ws.receive_json()["session_date"],TODAY.date().isoformat())
+            self.supervisor.clock=lambda:TODAY+timedelta(days=1)
+            with self.assertRaises(WebSocketDisconnect) as caught:
+                ws.receive_json()
+            self.assertEqual(caught.exception.code,4401)
+        self.assertEqual(self.client.get("/api/state").status_code,401)
+
     def test_missing_news_never_triggers_kotak_order(self):
         self.supervisor.cycle()
         self.assertIsNone(self.supervisor.runtime)

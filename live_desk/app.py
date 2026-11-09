@@ -193,7 +193,8 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
 
     @app.websocket("/ws")
     async def realtime(websocket:WebSocket):
-        if not logged_in(websocket.cookies.get(COOKIE)):
+        cookie=websocket.cookies.get(COOKIE)
+        if not logged_in(cookie):
             await websocket.close(code=4401)
             return
         if not origin_allowed(websocket.headers, websocket.url.scheme):
@@ -201,9 +202,13 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
             return
         await websocket.accept()
         try:
-            while True:
-                await websocket.send_json(await asyncio.to_thread(desk.snapshot))
+            while logged_in(cookie):
+                state=await asyncio.to_thread(desk.snapshot)
+                if not logged_in(cookie):
+                    break
+                await websocket.send_json(state)
                 await asyncio.sleep(2)
+            await websocket.close(code=4401)
         except (WebSocketDisconnect,RuntimeError):
             return
 
