@@ -46,8 +46,8 @@ def load_policy(path: Path) -> LivePolicy:
 
 def candidate_entry(*, side: str, previous_price: Decimal, price: Decimal,
                     orb_high: Decimal, orb_low: Decimal, tick_at: datetime,
-                    policy: LivePolicy, open_long: int, open_short: int,
-                    reserved_gross: Decimal, open_positions: int = 0) -> int | None:
+                    policy: LivePolicy, open_long: int = 0, open_short: int = 0,
+                    reserved_gross: Decimal = Decimal(0), open_positions: int = 0) -> int | None:
     if tick_at.tzinfo is None or tick_at.utcoffset() is None:
         raise ValueError("Tick time must include timezone")
     local = tick_at.astimezone(IST)

@@ -693,7 +693,10 @@ class LiveSupervisor:
                     self.error=f"Live supervisor failed ({type(exc).__name__})"
                 self.disarm("Live supervisor safety halt")
                 LOG.exception("Supervisor error; new orders disarmed")
-            self.stop_event.wait(3)
+            now = self.now()
+            exit_at = datetime.combine(now.date(), self.policy.exit_time, tzinfo=IST)
+            seconds_until_exit = (exit_at - now).total_seconds()
+            self.stop_event.wait(min(3, seconds_until_exit) if seconds_until_exit > 0 else 3)
 
     def stop(self):
         self.stop_event.set()

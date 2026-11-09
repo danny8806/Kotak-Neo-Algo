@@ -12,6 +12,7 @@ import time as wall_time
 from concurrent.futures import ThreadPoolExecutor, Future, wait
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from itertools import repeat
 
 from live_desk.dhan_data import IST
 from live_desk.kotak_gateway import cancel_kotak_order, place_kotak_order, reconcile_kotak_tag
@@ -133,20 +134,16 @@ class LiveRuntime:
             if not self.enabled or self.close_only or previous is None:
                 return None
             side = self.signals[symbol]["side"]
-            rows = self.ledger.snapshot(self.session_date)
-            entries = [row for row in rows if row["phase"] == "ENTRY"]
-            long_count = sum(row["side"] == "BUY" for row in entries)
-            short_count = sum(row["side"] == "SELL" for row in entries)
-            reserved = sum(Decimal(row["reserved_notional"]) for row in entries)
             high, low = self.opening_ranges[symbol]
             quantity = candidate_entry(
                 side=side, previous_price=previous, price=price,
                 orb_high=high, orb_low=low, tick_at=at, policy=self.policy,
-                open_long=long_count, open_short=short_count, reserved_gross=reserved,
-                open_positions=len(entries))
+            )
             if quantity is None:
                 return None
             direction = "BUY" if side == "LONG" else "SELL"
+            # The transaction enforces all exposure limits and deduplication.
+            # Ordinary ticks never read the ledger.
             intent = self.ledger.reserve_entry(
                 session_date=self.session_date, symbol=symbol, side=direction,
                 quantity=quantity, reference_price=price, at=at,
@@ -227,19 +224,13 @@ class LiveRuntime:
         self.reconcile_pending(at)
         # Cancel any still-open entry order once, then require a terminal broker
         # report before closing its actually filled quantity.
-        for row in self.ledger.snapshot(self.session_date):
-            if row["phase"] != "ENTRY" or row["state"] not in {"ACKNOWLEDGED", "PARTIAL"}:
-                continue
-            if not row.get("broker_order_id"):
-                self._error(row["tag"],f'{row["symbol"]}: missing order ID; EOD exit blocked')
-                continue
-            try:
-                self.ledger.mark_cancel_pending(row["tag"], at)
-                cancel_kotak_order(self.broker, row["broker_order_id"])
-                report = reconcile_kotak_tag(self.broker, row["tag"])
-                self.ledger.apply_broker_report(report, at)
-            except Exception as exc:
-                self._error(row["tag"],f'{row["symbol"]}: entry cancellation/reconciliation pending ({type(exc).__name__})')
+        working_entries = [
+            row for row in self.ledger.snapshot(self.session_date)
+            if row["phase"] == "ENTRY" and row["state"] in {"ACKNOWLEDGED", "PARTIAL"}
+        ]
+        if working_entries:
+            # Independent cancellations share the existing broker rate limiter.
+            list(self.submissions.map(self._cancel_entry, working_entries, repeat(at)))
         rows = self.ledger.snapshot(self.session_date)
         exits = {row["symbol"]: row for row in rows if row["phase"] == "EXIT"}
         candidates = []
@@ -286,6 +277,19 @@ class LiveRuntime:
             except Exception:
                 results.append({"state":"SUBMISSION_UNKNOWN"})
         return results
+
+    def _cancel_entry(self, row: dict, at: datetime) -> None:
+        tag = row["tag"]
+        if not row.get("broker_order_id"):
+            self._error(tag, f'{row["symbol"]}: missing order ID; EOD exit blocked')
+            return
+        try:
+            self.ledger.mark_cancel_pending(tag, at)
+            cancel_kotak_order(self.broker, row["broker_order_id"])
+            report = reconcile_kotak_tag(self.broker, tag)
+            self.ledger.apply_broker_report(report, at)
+        except Exception as exc:
+            self._error(tag, f'{row["symbol"]}: entry cancellation/reconciliation pending ({type(exc).__name__})')
 
     def close(self) -> None:
         with self.lock:self.enabled=False
