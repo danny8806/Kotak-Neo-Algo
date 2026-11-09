@@ -4,7 +4,7 @@ Only exchange NSE_EQ subscribed symbols reach the runtime. Broker orders are
 submitted separately through Kotak Neo. Connection failures suppress entries.
 """
 from __future__ import annotations
-import json, math, os, struct, threading
+import json, math, os, struct, threading, time
 from datetime import datetime, timedelta
 from typing import Callable
 from live_desk.dhan_data import DhanDataClient, IST
@@ -29,19 +29,21 @@ def subscription_map(securities: dict[str, str]) -> dict[str, str]:
     return mapping
 
 
-def parse_ticker(packet:bytes):
+def _decode_ticker(packet: bytes):
     if not isinstance(packet,bytes) or len(packet)<16:return None
-    response=packet[0]
-    declared=struct.unpack_from("<h",packet,1)[0]
+    response,declared,segment,security_id,price,timestamp=struct.unpack_from("<BhBifi",packet)
     if response!=2 or declared<16 or declared>len(packet):return None
-    segment=packet[3]
-    security_id=struct.unpack_from("<i",packet,4)[0]
-    price=struct.unpack_from("<f",packet,8)[0]
-    timestamp=struct.unpack_from("<i",packet,12)[0]
     if security_id<=0 or not math.isfinite(price) or price<=0:return None
-    return {"security_id":str(security_id),"ltp":float(price),
-            "exchange_timestamp":datetime.fromtimestamp(timestamp,IST).isoformat(),
-            "segment_code":segment}
+    # Float32 wire noise must not turn a price equal to an NSE cash boundary into a cross.
+    return str(security_id),round(price,2),datetime.fromtimestamp(timestamp,IST),segment
+
+
+def parse_ticker(packet: bytes):
+    decoded=_decode_ticker(packet)
+    if decoded is None:return None
+    security_id,price,at,segment=decoded
+    return {"security_id":security_id,"ltp":price,"exchange_timestamp":at.isoformat(),"segment_code":segment}
+
 
 class LiveTicker:
     def __init__(self,client:DhanDataClient,securities:dict[str,str],on_tick:Callable[[dict],None]):
@@ -53,6 +55,8 @@ class LiveTicker:
         self.timestamp_offset = timedelta(seconds=int(offset))
         self.on_tick=on_tick
         self.lock=threading.RLock()
+        self.subscription_lock=threading.Lock()
+        self.subscribed_socket=None
         self.stop_event=threading.Event()
         self.thread=None
         self.socket=None
@@ -68,23 +72,31 @@ class LiveTicker:
     def add_symbols(self,securities:dict[str,str]):
         """Subscribe newly mapped NSE_EQ symbols on the existing Dhan socket."""
         additions = subscription_map(securities)
-        with self.lock:
-            existing_ids = {symbol: security_id for security_id, symbol in self.map.items()}
-            for security_id, symbol in additions.items():
-                if (self.map.get(security_id, symbol) != symbol
-                        or existing_ids.get(symbol, security_id) != security_id):
-                    raise ValueError("Dhan subscription mapping conflicts with an existing symbol or ID")
-            fresh={key:value for key,value in additions.items() if key not in self.map}
-            self.map.update(fresh)
-            ws=self.socket
-        if ws and fresh:
-            ids=list(fresh)
-            for offset in range(0,len(ids),100):
-                batch=ids[offset:offset+100]
-                ws.send(json.dumps({"RequestCode":15,"InstrumentCount":len(batch),
-                    "InstrumentList":[{"ExchangeSegment":"NSE_EQ","SecurityId":id_}
-                                      for id_ in batch]}))
+        with self.subscription_lock:
+            with self.lock:
+                existing_ids = {symbol: security_id for security_id, symbol in self.map.items()}
+                for security_id, symbol in additions.items():
+                    if (self.map.get(security_id, symbol) != symbol
+                            or existing_ids.get(symbol, security_id) != security_id):
+                        raise ValueError("Dhan subscription mapping conflicts with an existing symbol or ID")
+                fresh={key:value for key,value in additions.items() if key not in self.map}
+                self.map.update(fresh)
+                ws=self.subscribed_socket
+            if ws and fresh:
+                try:
+                    self._subscribe(ws,list(fresh))
+                except Exception:
+                    self._set(state="RECONNECTING",error="Dhan subscription send failed")
+                    ws.close()
         return set(fresh.values())
+
+    @staticmethod
+    def _subscribe(ws,ids):
+        for offset in range(0,len(ids),100):
+            batch=ids[offset:offset+100]
+            ws.send(json.dumps({"RequestCode":15,"InstrumentCount":len(batch),
+                "InstrumentList":[{"ExchangeSegment":"NSE_EQ","SecurityId":id_}
+                                  for id_ in batch]}))
 
     def refresh_authentication(self):
         """Reconnect an existing socket after the Dhan supervisor rotates tokens."""
@@ -124,13 +136,12 @@ class LiveTicker:
                 url=self.client.websocket_url()
                 self.token_created_at=getattr(self.client,"token_created_at",None)
                 def on_open(ws):
-                    with self.lock:ids=list(self.map)
-                    for offset in range(0,len(ids),100):
-                        batch=ids[offset:offset+100]
-                        ws.send(json.dumps({"RequestCode":15,"InstrumentCount":len(batch),
-                            "InstrumentList":[{"ExchangeSegment":"NSE_EQ","SecurityId":id_}
-                                              for id_ in batch]}))
-                    self._set(state="CONNECTED",error=None)
+                    with self.subscription_lock:
+                        with self.lock:ids=list(self.map)
+                        self._subscribe(ws,ids)
+                        with self.lock:
+                            self.subscribed_socket=ws
+                            self.status.update(state="CONNECTED",error=None)
                 def on_message(ws,message):
                     nonlocal retry
                     if not isinstance(message, bytes):
@@ -140,21 +151,25 @@ class LiveTicker:
                             self._set(state="RECONNECTING", error="Dhan feed disconnected")
                             ws.close()
                             return
-                        tick = parse_ticker(packet)
-                        if tick is None or tick["segment_code"] != 1:
+                        received_ns=time.perf_counter_ns()
+                        decoded=_decode_ticker(packet)
+                        if decoded is None:
+                            continue
+                        security_id,price,raw_at,segment=decoded
+                        if segment!=1:
                             continue
                         with self.lock:
-                            symbol = self.map.get(tick["security_id"])
+                            symbol=self.map.get(security_id)
                         if symbol is None:
                             continue
-                        retry = 1
-                        now = datetime.now(IST)
-                        # Normalize only the configured feed convention. Keep the
-                        # original trade time separate from the receipt time.
-                        exchange_at = datetime.fromisoformat(tick["exchange_timestamp"]) - self.timestamp_offset
-                        tick.update(symbol=symbol, timestamp=exchange_at, received_at=now)
-                        self._set(last_tick=now.isoformat(), error=None,
-                                  last_exchange_trade_at=exchange_at.isoformat(), state="CONNECTED")
+                        retry=1
+                        now=datetime.now(IST)
+                        exchange_at=raw_at-self.timestamp_offset
+                        tick={"security_id":security_id,"ltp":price,"segment_code":segment,
+                              "exchange_timestamp":raw_at.isoformat(),"symbol":symbol,
+                              "timestamp":exchange_at,"received_at":now,"received_ns":received_ns}
+                        self._set(last_tick=now.isoformat(),error=None,
+                                  last_exchange_trade_at=exchange_at.isoformat(),state="CONNECTED")
                         try:
                             self.on_tick(tick)
                         except Exception as exc:
@@ -172,7 +187,9 @@ class LiveTicker:
             except Exception as exc:
                 self._set(state="RECONNECTING",error=f"Market feed connection ({type(exc).__name__})")
             finally:
-                with self.lock:self.socket=None
+                with self.lock:
+                    self.socket=None
+                    self.subscribed_socket=None
             if not self.stop_event.is_set():
                 retry=min(retry*2,60)
                 self.stop_event.wait(retry)

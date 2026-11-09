@@ -11,6 +11,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from time import perf_counter_ns
 from unittest.mock import patch
 
 from live_desk.dhan_data import IST, DhanTokenSupervisor
@@ -443,7 +444,12 @@ class ProductionReplayTests(unittest.TestCase):
         token='synthetic-bridge-token-at-least-thirty-two-characters'
         password='synthetic-dashboard-password'
         secret='synthetic-session-secret-at-least-thirty-two-characters'
+        master_reads=[]
         class Exchange(ReplayExchange):
+            def scrip_master(self,*,exchange_segment):
+                master_reads.append(exchange_segment)
+                return "https://lapi.kotaksecurities.com/test-nse-cash.csv"
+
             def positions(self):
                 quantities = {}
                 with self.lock:
@@ -474,12 +480,25 @@ class ProductionReplayTests(unittest.TestCase):
                 symbol = kwargs["symbol"]
                 return [{"pExchSeg": "nse_cm", "pGroup": "EQ", "pScripRefKey": symbol,
                          "pTrdSymbol": symbol + "-EQ", "pSymbol": ids[symbol]}]
+        from unittest.mock import MagicMock
+        csv_rows=["pExchSeg,pGroup,pScripRefKey,pTrdSymbol,pSymbol"]+[
+            f"nse_cm,EQ,{symbol},{symbol}-EQ,{token}" for symbol,token in ids.items()
+        ]
+        response=MagicMock()
+        response.__enter__.return_value=response
+        response.status_code=200
+        response.iter_content.return_value=[("\n".join(csv_rows)).encode()]
+        fetch=patch("live_desk.kotak_instruments.requests.get",return_value=response)
+        master_download=fetch.start()
+        self.addCleanup(fetch.stop)
         broker=Exchange();broker.filled=True
         candles = []
+        history_wave=threading.Barrier(len(ids))
         class Dhan:
             token='synthetic-dhan-token'
             def get_intraday(self, security_id, start, end, *, interval):
                 candles.append((security_id, start, end, interval))
+                history_wave.wait(timeout=3)
                 return {"timestamp": [int(NOW.replace(minute=16).timestamp())],
                         "open": [98], "high": [100], "low": [95], "close": [99]}
             def get_ohlc(self,*args,**kwargs):return {}
@@ -517,9 +536,11 @@ class ProductionReplayTests(unittest.TestCase):
                 'Idempotency-Key':'synthetic-e2e'},json=report)
             self.assertEqual(response.status_code,200,response.text)
             def emit(symbol, price):
+                received_ns=perf_counter_ns()
                 packet=struct.pack('<BhBifi',2,16,1,int(ids[symbol]),float(price),int(now[0].timestamp()))
                 tick=parse_ticker(packet)
                 tick.update(symbol=by_id[tick["security_id"]],timestamp=datetime.fromisoformat(tick['exchange_timestamp']))
+                tick["received_ns"]=received_ns
                 desk.on_tick(tick)
             desk.cycle()
             self.assertEqual(desk.dhan_ids, ids)
@@ -535,6 +556,8 @@ class ProductionReplayTests(unittest.TestCase):
             desk.cycle()
             self.assertIs(desk.ticker, warmed_ticker)
             self.assertEqual({s: x.token for s,x in desk.kotak_ids.items()}, ids)
+            self.assertEqual(master_reads,["nse_cm"])
+            master_download.assert_called_once()
             self.assertEqual(set(candles), {
                 (d, NOW.replace(minute=15), NOW.replace(minute=17), "1") for d in ids.values()
             })
@@ -554,6 +577,10 @@ class ProductionReplayTests(unittest.TestCase):
             desk.refresh_broker()
             state=client.get('/api/state').json()
             self.assertEqual(len(state["intents"]), 10)
+            latency=state["entry_dispatch_latency"]
+            self.assertEqual(latency["samples"],10)
+            self.assertGreaterEqual(latency["p95_ms"],latency["p50_ms"])
+            print(f"Simulated 10-stock dispatch timing: {latency}",flush=True)
             self.assertTrue(all(row["state"] == "FILLED" for row in state["intents"]))
             self.assertEqual(len(broker.calls), 10)
             for call in broker.calls:

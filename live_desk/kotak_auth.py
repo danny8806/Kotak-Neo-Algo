@@ -117,6 +117,6 @@ class KotakSession:
 
     def __getattr__(self, name):
         if name not in {"positions", "order_report", "trade_report", "limits",
-                        "search_scrip", "cancel_order"}:
+                        "search_scrip", "scrip_master", "cancel_order"}:
             raise AttributeError(name)
         return lambda *args, **kwargs: self._call(name, args, kwargs)

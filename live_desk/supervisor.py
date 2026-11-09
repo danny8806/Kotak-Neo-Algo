@@ -7,6 +7,7 @@ live Dhan prices, and an explicit per-session arming operation.
 """
 from __future__ import annotations
 import hashlib, json, logging, os, threading
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import replace
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -19,7 +20,7 @@ from live_desk.dhan_data import DhanDataClient, DhanTokenSupervisor, IST
 from live_desk.dhan_instruments import fetch_dhan_symbols
 from live_desk.kotak_gateway import KotakCredentials, login_kotak, reconcile_kotak_tag
 from live_desk.kotak_auth import KotakSession
-from live_desk.kotak_instruments import lookup_kotak_equity
+from live_desk.kotak_instruments import load_kotak_equity_master, lookup_kotak_equity
 from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
 from live_desk.strategy import LATEST_ENTRY_CUTOFF, load_policy
@@ -93,8 +94,9 @@ class LiveSupervisor:
         self.runtime=None
         self.dhan_ids={}
         self.kotak_ids={}
+        self._kotak_master=None
+        self.preparation=ThreadPoolExecutor(max_workers=10,thread_name_prefix="live-market-setup")
         self.opening_ranges={}
-        self._pending_opening_ranges={}
         self.orb_events={}
         self._orb_previous={}
         self._orb_last_tick={}
@@ -210,11 +212,8 @@ class LiveSupervisor:
         with self.lock:
             self.armed=False
             self.session_authorized=False
-            if self.runtime:
-                self.runtime.enabled=False
-                self.runtime.close()
-            if self.ticker:self.ticker.stop()
-            if self.position_ticker:self.position_ticker.stop()
+            runtime,ticker,position_ticker=self.runtime,self.ticker,self.position_ticker
+            if runtime:runtime.enabled=False
             self.ticker=None
             self.ticker_symbols=set()
             self.position_ticker=None
@@ -230,8 +229,8 @@ class LiveSupervisor:
             self.research_dhan_ids={}
             self.dhan_ids={}
             self.kotak_ids={}
+            self._kotak_master=None
             self.opening_ranges={}
-            self._pending_opening_ranges={}
             self.orb_events={}
             self._orb_previous={}
             self._orb_last_tick={}
@@ -249,6 +248,10 @@ class LiveSupervisor:
             self.status="WAITING_FOR_SIGNALS"
             self.error=None
             self.session_date=day
+
+        if ticker:ticker.stop()
+        if position_ticker:position_ticker.stop()
+        if runtime:runtime.close()
 
     def _load_report(self):
         report,sha,eligible,research=self.today_report()
@@ -313,24 +316,46 @@ class LiveSupervisor:
             self.vix_error=type(exc).__name__
             LOG.warning("Dhan India VIX quote unavailable (%s)",type(exc).__name__)
 
+    def _load_kotak_master(self):
+        if self._kotak_master is None:
+            self._kotak_master=load_kotak_equity_master(self.broker)
+        return self._kotak_master
+
+    def _lookup_kotak_instruments(self, symbols):
+        if callable(getattr(self.broker,"scrip_master",None)):
+            master=self._load_kotak_master()
+            missing=symbols-master.keys()
+            if missing:
+                raise ValueError(f"Kotak exact NSE EQ mapping missing or ambiguous for {sorted(missing)}")
+            return {symbol:master[symbol] for symbol in symbols}
+        return {symbol:lookup_kotak_equity(self.broker,symbol) for symbol in sorted(symbols)}
+
     def _map_instruments(self,now):
         wanted={item["symbol"] for item in self.report["signals"]}
-        dhan_ids=dict(self.dhan_ids)
-        missing=wanted-set(dhan_ids)
-        if missing:
-            dhan=self.master_fetch(missing,now=now)
-            if dhan.session_date!=now.date().isoformat() or set(dhan.security_ids)!=missing:
-                raise RuntimeError("NSE EQ Dhan symbol master incomplete")
-            dhan_ids.update(dhan.security_ids)
-        if len(set(dhan_ids.values())) != len(dhan_ids):
-            raise RuntimeError("Duplicate Dhan security IDs in the session watchlist")
-        kotak=dict(self.kotak_ids)
-        if self.broker is not None:
-            for symbol in sorted(wanted-set(kotak)):
-                kotak[symbol]=lookup_kotak_equity(self.broker,symbol)
-        with self.lock:
-            self.dhan_ids=dhan_ids
-            self.kotak_ids=kotak
+        missing=wanted-self.dhan_ids.keys()
+        kotak_missing=wanted-self.kotak_ids.keys()
+        kotak_job=(self.preparation.submit(self._lookup_kotak_instruments,kotak_missing)
+                   if self.broker is not None and kotak_missing else None)
+        try:
+            if missing:
+                dhan=self.master_fetch(missing,now=now)
+                if dhan.session_date!=now.date().isoformat() or set(dhan.security_ids)!=missing:
+                    raise RuntimeError("NSE EQ Dhan symbol master incomplete")
+                dhan_ids={**self.dhan_ids,**dhan.security_ids}
+                if len(set(dhan_ids.values())) != len(dhan_ids):
+                    raise RuntimeError("Duplicate Dhan security IDs in the session watchlist")
+                with self.lock:self.dhan_ids=dhan_ids
+            self._warm_entry_feed(self.now())
+        finally:
+            if kotak_job:
+                try:
+                    kotak={**self.kotak_ids,**kotak_job.result()}
+                    if len({item.token for item in kotak.values()})!=len(kotak):
+                        raise RuntimeError("Duplicate Kotak tokens in the session watchlist")
+                except Exception as exc:
+                    LOG.warning("Kotak watchlist mapping unavailable (%s)",type(exc).__name__)
+                else:
+                    with self.lock:self.kotak_ids=kotak
 
     def _map_late_research(self,now):
         if not self.entry_watchlist or not self.research_report:
@@ -352,13 +377,9 @@ class LiveSupervisor:
         with self.lock:
             self.research_dhan_ids.update(ids)
 
-    def _build_runtime(self):
-        now=self.now()
-        if (not self.entry_watchlist or now.weekday()>=5 or
+    def _warm_entry_feed(self,now):
+        if (self.stop_event.is_set() or not self.entry_watchlist or not self.dhan_ids or now.weekday()>=5 or
                 not FEED_WARMUP<=now.time()<self.policy.entry_cutoff):
-            return
-        if self.runtime:
-            self.status="MONITORING_LIVE"
             return
         if self.ticker is None:
             ticker=self.ticker_factory(self.dhan,self.dhan_ids,self.on_tick)
@@ -370,50 +391,64 @@ class LiveSupervisor:
             if missing:
                 self.ticker.add_symbols({symbol:self.dhan_ids[symbol] for symbol in missing})
                 self.ticker_symbols.update(missing)
+
+    def _build_runtime(self):
+        now=self.now()
+        if not self.entry_watchlist or self.ticker is None or now.time()>=self.policy.entry_cutoff:
+            return
+        if self.runtime:
+            self.status="MONITORING_LIVE"
+            return
         if now.time()<START:
             self.status="WARMING_DHAN_FEED"
             return
         if self.policy.timestamp_mode not in {"start","end"}:
             raise RuntimeError("Dhan 09:15 candle timestamp mode not yet verified")
 
-        pending=self._pending_opening_ranges
-        for symbol,security_id in self.dhan_ids.items():
-            if symbol in pending:
-                continue
+        jobs={self.preparation.submit(opening_range,self.dhan,security_id,now.date(),
+                                      timestamp_mode=self.policy.timestamp_mode):symbol
+              for symbol,security_id in self.dhan_ids.items() if symbol not in self.opening_ranges}
+        for job in as_completed(jobs):
+            symbol=jobs[job]
             try:
-                pending[symbol]=opening_range(self.dhan,security_id,now.date(),
-                                              timestamp_mode=self.policy.timestamp_mode)
+                bounds=job.result()
             except Exception as exc:
-                self.status="WAITING_FOR_OPENING_CANDLE"
                 LOG.info("Dhan opening candle unavailable for %s (%s)",symbol,type(exc).__name__)
-                return
-        opening=dict(pending)
-        runtime=None
-        if self.broker is not None:
-            runtime=LiveRuntime(
-                session_date=now.date(),signals=self.report["signals"],dhan_ids=self.dhan_ids,
-                kotak_instruments=self.kotak_ids,opening_ranges=opening,
-                policy=self.policy,ledger=self.ledger,broker=self.broker,
-                enabled=False,clock=self.now)
+                continue
+            with self.lock:
+                baseline=self._opening_baseline(symbol,self.now())
+                if baseline:
+                    self._orb_previous[symbol],self._orb_last_tick[symbol]=baseline
+                self.opening_ranges[symbol]=bounds
+        if self.opening_ranges.keys()!=self.dhan_ids.keys():
+            self.status="WAITING_FOR_OPENING_CANDLE"
+            return
+        if self.broker is None or self.kotak_ids.keys()!=self.dhan_ids.keys():
+            self.status="MONITORING_DHAN_ORB_KOTAK_PENDING"
+            return
+        if self.stop_event.is_set() or self.now().time()>=self.policy.entry_cutoff:
+            return
+        runtime=LiveRuntime(
+            session_date=now.date(),signals=self.report["signals"],dhan_ids=self.dhan_ids,
+            kotak_instruments=self.kotak_ids,opening_ranges=dict(self.opening_ranges),
+            policy=self.policy,ledger=self.ledger,broker=self.broker,enabled=False,clock=self.now)
         with self.lock:
             received_at=self.now()
-            for symbol in opening:
-                quote=self.quote_data.get(symbol,{})
-                if "tick_at" not in quote:
-                    continue
-                tick_at=datetime.fromisoformat(quote["tick_at"])
-                if not timedelta(0)<=received_at-tick_at<=MAX_ENTRY_TICK_AGE:
-                    continue
-                price=Decimal(str(quote["ltp"]))
-                if symbol not in self.opening_ranges:
-                    self._orb_previous[symbol]=price
-                    self._orb_last_tick[symbol]=tick_at
-                if runtime:
-                    runtime.previous[symbol]=price
-                    runtime.last_tick_at[symbol]=tick_at
-            self.opening_ranges=opening
+            for symbol in self.opening_ranges:
+                baseline=self._opening_baseline(symbol,received_at)
+                if baseline:
+                    runtime.previous[symbol],runtime.last_tick_at[symbol]=baseline
             self.runtime=runtime
-            self.status="MONITORING_LIVE" if runtime else "MONITORING_DHAN_ORB_KOTAK_PENDING"
+            self.status="MONITORING_LIVE"
+
+    def _opening_baseline(self,symbol,now):
+        quote=self.quote_data.get(symbol,{})
+        if "tick_at" not in quote:
+            return None
+        tick_at=datetime.fromisoformat(quote["tick_at"])
+        if timedelta(0)<=now-tick_at<=MAX_ENTRY_TICK_AGE:
+            return Decimal(str(quote["ltp"])),tick_at
+        return None
 
     def _broker_cash(self):
         response=self.broker.limits()  # kotakneoapi v3: all segments, no arguments
@@ -437,15 +472,20 @@ class LiveSupervisor:
                 except (ValueError,TypeError):continue
                 if timedelta(0)<=age<=PRICE_EXPIRY:
                     current_quotes[symbol]=dict(q)
-        position=broker_view.positions(self.broker,current_quotes)
-        observed_at = self.now()
-        order_rows = book_rows(self.broker.order_report(), "orders")
-        trade_rows = book_rows(self.broker.trade_report(), "trades")
-        books = (order_rows, trade_rows)
-        orders=broker_view.orders(self.broker, rows=order_rows)
-        fills=broker_view.fills(self.broker, rows=trade_rows)
-        self.ledger.record_broker_fills(fills, now)
-        cash=self._broker_cash()
+        observed_at=self.now()
+        positions_job=self.preparation.submit(broker_view.positions,self.broker,current_quotes)
+        cash_job=self.preparation.submit(self._broker_cash)
+        try:
+            order_rows=book_rows(self.broker.order_report(),"orders")
+            trade_rows=book_rows(self.broker.trade_report(),"trades")
+        finally:
+            wait((positions_job,cash_job))
+        position=positions_job.result()
+        cash=cash_job.result()
+        books=(order_rows,trade_rows)
+        orders=broker_view.orders(self.broker,rows=order_rows)
+        fills=broker_view.fills(self.broker,rows=trade_rows)
+        self.ledger.record_broker_fills(fills,now)
         prior_recovery=self.ledger.prior_session_recovery_count(now.date())
         now=self.now()
         if self.runtime:
@@ -462,7 +502,7 @@ class LiveSupervisor:
             self.broker_fills=fills
             self.available_cash=str(cash)
             self.prior_session_recovery=prior_recovery
-            self.last_book_at=now
+            self.last_book_at=observed_at
             if self.status!="MONITORING_LIVE":self.status="BROKER_CONNECTED"
         self._refresh_position_feed(now)
 
@@ -540,11 +580,9 @@ class LiveSupervisor:
             ready=self.armed and self._health_check_locked(now)
             if self.runtime:self.runtime.enabled=ready
             runtime=self.runtime
-        self._observe_orb_crossing(symbol,value,ts,now)
         if runtime:
-            # Preserve the previous price while monitoring so the first tick
-            # after arming can qualify. Runtime.enabled independently gates orders.
-            runtime.on_tick(tick)
+            runtime.on_market_tick(symbol,value,ts,now,tick.get("received_ns"))
+        self._observe_orb_crossing(symbol,value,ts,now)
         # Position exits follow the configured 15:15 IST square-off policy.
         # Loss limits disarm new entries; they do not create an implicit stop.
 
@@ -664,7 +702,7 @@ class LiveSupervisor:
             # Recovery never uses these inert Dhan IDs or ORB values for entries.
             rows=entries
             symbols=[r["symbol"] for r in rows]
-            kotak={s:lookup_kotak_equity(self.broker,s) for s in symbols}
+            kotak=self._lookup_kotak_instruments(set(symbols))
             self.runtime=LiveRuntime(session_date=now.date(),
                 signals=[{"symbol":r["symbol"],"side":"LONG" if r["side"]=="BUY" else "SHORT"} for r in rows],
                 dhan_ids={s:"0" for s in symbols},kotak_instruments=kotak,
@@ -726,7 +764,11 @@ class LiveSupervisor:
                 self.disarm("Dhan feed token refreshed; re-arming required")
         if self.position_ticker and hasattr(self.position_ticker,"refresh_authentication"):
             self.position_ticker.refresh_authentication()
-        if self.broker is not None and (self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH):
+        refresh_due=self.broker is not None and (self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH)
+        # Recently verified books can wait a few seconds for opening preparation.
+        opening_boundary=self.last_book_at is not None and now-self.last_book_at<BOOK_EXPIRY and (
+            time(9,15,55)<=now.time()<time(9,16,5))
+        if refresh_due and not opening_boundary:
             self.blocked_stage="BROKER_BOOKS"
             self.refresh_broker()
         self.blocked_stage="CURRENT_SESSION_SIGNALS"
@@ -750,6 +792,7 @@ class LiveSupervisor:
                     self.blocked_stage="CURRENT_SESSION_SIGNALS"
                 else:
                     self.blocked_stage=("KOTAK_AUTHENTICATION" if not self.broker else
+                                        "INSTRUMENT_MAPPING" if self.kotak_ids.keys()!=self.dhan_ids.keys() else
                                         "OPENING_RANGE_AND_FEED" if not self.runtime else None)
             elif self.dhan is None:
                 self.status="NEEDS_DHAN_CREDENTIALS"
@@ -763,7 +806,10 @@ class LiveSupervisor:
                     if self.runtime:self.runtime.enabled=False
                     self.status="NEEDS_KOTAK_CREDENTIALS"
                     self.blocked_stage="NEEDS_KOTAK_CREDENTIALS"
-        self._refresh_vix_context(now)
+        if refresh_due and opening_boundary and self.now().time()>=START:
+            self.refresh_broker()
+        if not time(9,15)<=self.now().time()<time(9,16,5):
+            self._refresh_vix_context(now)
         if self.armed and not self.ready():
             self.disarm("Broker or market data health degraded")
         # Entries cannot be recreated after restart without manual arming.
@@ -799,6 +845,7 @@ class LiveSupervisor:
         if self.dhan_auth:self.dhan_auth.stop()
         if self.thread and self.thread.is_alive() and self.thread!=threading.current_thread():
             self.thread.join(timeout=8)
+        self.preparation.shutdown(wait=False,cancel_futures=True)
         self.ledger.close()
 
     def snapshot(self):
@@ -820,9 +867,7 @@ class LiveSupervisor:
             orders=list(self.broker_orders)
             fills=list(self.broker_fills)
             ticker=self.ticker.snapshot() if self.ticker else {"state":"NOT_STARTED"}
-            monitoring=self._health_check_locked(now)
-            intents=self.ledger.snapshot(now.date())
-            trades=build_trade_journal(intents,[],[])["trades"]
+            blockers=self._readiness_blockers_locked(now)
             result={
                 "mode":"LIVE_KOTAK_NEO_ONLY","server_time":now.isoformat(),
                 "supervisor_status":self.status,
@@ -863,8 +908,8 @@ class LiveSupervisor:
                     "state":"AUTHENTICATED" if self.broker else "NOT_STARTED"},
                 "broker_books_updated_at":self.last_book_at.isoformat() if self.last_book_at else None,
                 "available_cash":self.available_cash if books_fresh else None,
-                "readiness":monitoring,
-                "readiness_blockers":self._readiness_blockers_locked(now),
+                "readiness":not blockers,
+                "readiness_blockers":blockers,
                 "prior_session_recovery_count":self.prior_session_recovery,
                 "strategy":{"opening_range":"09:15 one-minute candle","entry_cutoff":self.policy.entry_cutoff.isoformat(),
                             "exit_time":self.policy.exit_time.isoformat(),
@@ -874,8 +919,7 @@ class LiveSupervisor:
                             "max_positions":self.policy.max_positions,
                             "tick_stop_pct":None},
                 "positions":positions,"orders":orders,"fills":fills,
-                "intents":intents,
-                "closed_trades":[row for row in trades if row["status"]=="CLOSED"],
+                "entry_dispatch_latency":self.runtime.dispatch_latency() if self.runtime else None,
                 "error":self.error,"runtime_errors":self.runtime.errors[-10:] if self.runtime else [],
                 "quotes":{symbol:{**q,"fresh":bool(
                     (symbol=="INDIAVIX" and q.get("ohlc_at") and
@@ -884,4 +928,8 @@ class LiveSupervisor:
                      now-datetime.fromisoformat(q["tick_at"])<=PRICE_EXPIRY))}
                          for symbol,q in quotes.items()}
             }
+        intents=self.ledger.snapshot(now.date())
+        trades=build_trade_journal(intents,[],[])["trades"]
+        result["intents"]=intents
+        result["closed_trades"]=[row for row in trades if row["status"]=="CLOSED"]
         return result

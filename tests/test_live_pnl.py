@@ -1,5 +1,8 @@
 """Real-book P&L contracts: stale/missing prices and costs never become profit."""
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 from datetime import datetime,timedelta
 from live_desk.dhan_data import IST
 from live_desk.broker_view import positions,pnl_summary
@@ -79,6 +82,94 @@ class PnlSnapshotTests(unittest.TestCase):
         self.assertNotIn('FRESH_QUOTES',state['readiness_blockers'])
         self.now+=timedelta(seconds=2)
         self.assertIn('FRESH_QUOTES',self.desk.snapshot()['readiness_blockers'])
+        self.assertEqual(self.broker.order_calls,0)
+
+    def test_slow_dashboard_ledger_snapshot_does_not_hold_tick_lock(self):
+        self.desk.dhan_ids={"TESTA":"123"}
+        started,release=threading.Event(),threading.Event()
+        read=self.desk.ledger.snapshot
+
+        def slow_read(day):
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("Test did not release the dashboard query")
+            return read(day)
+
+        with patch.object(self.desk.ledger,"snapshot",side_effect=slow_read), ThreadPoolExecutor(2) as pool:
+            dashboard=pool.submit(self.desk.snapshot)
+            try:
+                self.assertTrue(started.wait(2))
+                tick=pool.submit(self.desk.on_tick,{"symbol":"TESTA","ltp":105,"timestamp":self.now})
+                tick.result(timeout=1)
+                self.assertEqual(self.desk.last_quote_at,self.now)
+            finally:
+                release.set()
+            dashboard.result(timeout=2)
+
+    def test_slow_or_unavailable_candle_does_not_hide_other_verified_ranges(self):
+        from unittest.mock import Mock
+
+        desk=self.desk
+        desk.session_date=NOW.date().isoformat()
+        desk.entry_watchlist=True
+        desk.dhan_ids={"TESTA":"123","TESTB":"456"}
+        desk.ticker=Mock()
+        released, published=threading.Event(),threading.Event()
+
+        class PublishedRanges(dict):
+            def __setitem__(self,symbol,bounds):
+                super().__setitem__(symbol,bounds)
+                if symbol=="TESTA":
+                    published.set()
+
+        desk.opening_ranges=PublishedRanges()
+
+        def candle(_dhan,security_id,_day,**_kwargs):
+            if security_id=="456":
+                if not released.wait(3):
+                    raise RuntimeError("Test did not release the slow candle")
+                raise ValueError("Dhan has not published this candle")
+            return 100,95
+
+        with patch("live_desk.supervisor.opening_range",side_effect=candle), ThreadPoolExecutor(1) as pool:
+            cycle=pool.submit(desk._build_runtime)
+            try:
+                self.assertTrue(published.wait(2))
+                self.assertEqual(desk.opening_ranges,{"TESTA":(100,95)})
+                self.assertIsNone(desk.runtime)
+            finally:
+                released.set()
+            cycle.result(timeout=2)
+        self.assertEqual(desk.status,"WAITING_FOR_OPENING_CANDLE")
+
+    def test_broker_books_overlap_independent_reads_and_keep_order_before_fills(self):
+        wave=threading.Barrier(3)
+        orders_observed=threading.Event()
+        original_positions=self.broker.positions
+        original_limits=self.broker.limits
+        original_orders=self.broker.order_report
+        original_trades=self.broker.trade_report
+
+        def positions():
+            wave.wait(timeout=2)
+            return original_positions()
+
+        def limits():
+            wave.wait(timeout=2)
+            return original_limits()
+
+        def orders():
+            wave.wait(timeout=2)
+            orders_observed.set()
+            return original_orders()
+
+        def trades():
+            self.assertTrue(orders_observed.is_set())
+            return original_trades()
+
+        with patch.multiple(self.broker,positions=positions,limits=limits,order_report=orders,trade_report=trades):
+            self.desk.refresh_broker()
+        self.assertTrue(self.desk.snapshot()["broker_connected"])
         self.assertEqual(self.broker.order_calls,0)
 
     def test_snapshot_expires_quote_even_between_broker_refreshes(self):

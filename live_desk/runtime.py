@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time as wall_time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, Future, wait
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -64,6 +65,8 @@ class LiveRuntime:
         self.submissions = ThreadPoolExecutor(max_workers=20, thread_name_prefix="kotak-order")
         self.pending: set[Future] = set()
         self.pending_entries: set[str] = set()
+        self.reserved_symbols: set[str] = set()
+        self.entry_dispatch_ms = deque(maxlen=100)
 
     def extend_signals(self, *, signals: list[dict], dhan_ids: dict[str, str],
                        kotak_instruments: dict[str, KotakInstrument],
@@ -120,15 +123,19 @@ class LiveRuntime:
         at = tick.get("timestamp")
         if not isinstance(at, datetime) or at.tzinfo is None or at.utcoffset() is None:
             return None
-        local = at.astimezone(IST)
-        if local.date() != self.session_date or local.time() < time(9, 16):
-            return None
-        age = self.clock().astimezone(IST) - local
-        if age < timedelta(seconds=-2) or age > MAX_ENTRY_TICK_AGE:
-            return None
         try:price = Decimal(str(tick.get("ltp")))
         except (ValueError,TypeError,ArithmeticError):return None
         if not price.is_finite() or price <= 0:
+            return None
+        return self.on_market_tick(symbol,price,at,self.clock(),tick.get("received_ns"))
+
+    def on_market_tick(self, symbol, price, at, now, received_ns=None):
+        """Process a supervisor-validated price with no second parsing pass."""
+        local=at.astimezone(IST)
+        if local.date()!=self.session_date or local.time()<time(9,16):
+            return None
+        age=now-local
+        if age<timedelta(seconds=-2) or age>MAX_ENTRY_TICK_AGE:
             return None
         with self.lock:
             prior_time = self.last_tick_at.get(symbol)
@@ -137,7 +144,9 @@ class LiveRuntime:
             previous = self.previous.get(symbol)
             self.previous[symbol] = price
             self.last_tick_at[symbol] = at
-            if not self.enabled or self.close_only or previous is None:
+            if not self._enabled or self.close_only or previous is None:
+                return None
+            if symbol in self.pending_entries or symbol in self.reserved_symbols:
                 return None
             side = self.signals[symbol]["side"]
             high, low = self.opening_ranges[symbol]
@@ -145,16 +154,17 @@ class LiveRuntime:
                 side=side, previous_price=previous, price=price,
                 orb_high=high, orb_low=low, tick_at=at, policy=self.policy,
             )
-            if quantity is None or symbol in self.pending_entries:
+            if quantity is None:
                 return None
             direction = "BUY" if side == "LONG" else "SELL"
-            future = self.submissions.submit(self._reserve_and_submit, symbol, direction, quantity, price, at)
+            started=received_ns if received_ns is not None else wall_time.perf_counter_ns()
+            future = self.submissions.submit(self._reserve_and_submit, symbol, direction, quantity, price, at,started)
             self.pending_entries.add(symbol)
             self.pending.add(future)
             future.add_done_callback(lambda done: self._submission_done(done, symbol))
             return {"symbol": symbol, "state": "SUBMISSION_QUEUED"}
 
-    def _reserve_and_submit(self, symbol, direction, quantity, price, at):
+    def _reserve_and_submit(self, symbol, direction, quantity, price, at, received_ns):
         if not self._entry_may_send(at):
             return
         # PostgreSQL still owns deduplication and every exposure limit.
@@ -164,7 +174,8 @@ class LiveRuntime:
             max_per_side=self.policy.max_long if direction == "BUY" else self.policy.max_short,
             gross_cap=self.policy.gross_cap, max_total=self.policy.max_positions)
         if intent:
-            self._submit_and_reconcile(intent, at)
+            with self.lock:self.reserved_symbols.add(symbol)
+            self._submit_and_reconcile(intent,at,received_ns=received_ns)
 
     def _submission_done(self, future: Future, symbol: str | None = None) -> None:
         with self.lock:
@@ -186,10 +197,10 @@ class LiveRuntime:
     def _entry_may_send(self, at: datetime) -> bool:
         now = self.clock().astimezone(IST)
         return (self.enabled and not self.close_only and now.date() == self.session_date
-                and now.time() < self.policy.entry_cutoff
+                and time(9,16) <= now.time() < self.policy.entry_cutoff
                 and timedelta(seconds=-2) <= now - at.astimezone(IST) <= MAX_ENTRY_TICK_AGE)
 
-    def _submit_and_reconcile(self, intent: dict, at: datetime) -> dict:
+    def _submit_and_reconcile(self, intent: dict, at: datetime, *, received_ns=None) -> dict:
         tag = intent["tag"]
         is_entry = intent.get("phase", "ENTRY") == "ENTRY"
         if is_entry and not self._entry_may_send(at):
@@ -201,10 +212,22 @@ class LiveRuntime:
             self.ledger.mark_not_submitted(tag, self.clock(), committed_for_send=True)
             return {"tag": tag, "state": "ABORTED"}
         result=None
+        dispatch_ns=None
+
+        def before_send():
+            nonlocal dispatch_ns
+            if not self._entry_may_send(at):
+                return False
+            dispatch_ns=wall_time.perf_counter_ns()
+            return True
+
         try:
-            guard = {"before_send": lambda: self._entry_may_send(at)} if (
-                is_entry and isinstance(self.broker, KotakSession)
-            ) else {}
+            guard={}
+            if is_entry and isinstance(self.broker,KotakSession):
+                guard["before_send"]=before_send
+            elif is_entry:
+                if not before_send():
+                    raise KotakEntryNotSent("Entry expired before dispatch")
             result = place_kotak_order(self.broker, self.kotak_instruments[intent["symbol"]],
                                        intent["side"], intent["quantity"], tag, **guard)
         except KotakEntryNotSent:
@@ -213,6 +236,10 @@ class LiveRuntime:
         except Exception as exc:
             # Even a timeout can follow broker acceptance. Only retry READS.
             self._error(tag,f"{intent['symbol']}: {type(exc).__name__}; reconcile tag {tag}")
+        finally:
+            if dispatch_ns is not None and received_ns is not None:
+                elapsed=(dispatch_ns-received_ns)/1_000_000
+                with self.lock:self.entry_dispatch_ms.append(elapsed)
         for attempt in range(3):
             if attempt:wall_time.sleep(.05*attempt)
             try:
@@ -223,6 +250,15 @@ class LiveRuntime:
             except Exception as exc:
                 self._error(tag,f"{intent['symbol']}: {type(exc).__name__}; reconcile tag {tag}")
         return {"tag": tag, "state": "SUBMISSION_UNKNOWN"}
+
+    def dispatch_latency(self):
+        with self.lock: samples=sorted(self.entry_dispatch_ms)
+        if not samples:
+            return {"samples":0,"p50_ms":None,"p95_ms":None,"max_ms":None}
+        def percentile(percent):
+            return round(samples[(len(samples)*percent+99)//100-1],3)
+        return {"samples":len(samples),"p50_ms":percentile(50),"p95_ms":percentile(95),
+                "max_ms":round(samples[-1],3)}
 
     def reconcile_pending(self, at: datetime, *, books=None, observed_at=None) -> None:
         with self.lock:

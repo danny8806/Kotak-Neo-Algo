@@ -110,16 +110,12 @@ class LiveLedger:
         notional = reference_price * quantity
         if notional > gross_cap:
             return None
-        with self.lock, self.engine.begin() as db:
+        with self.engine.begin() as db:
             self._lock_session(db, day)
-            existing = db.execute(select(intents.c.id).where(
-                intents.c.session_date == day, intents.c.symbol == symbol,
-                intents.c.phase == "ENTRY")).first()
-            if existing:
-                return None
-            rows = db.execute(select(intents.c.side, intents.c.reserved_notional).where(
+            rows = db.execute(select(intents.c.symbol, intents.c.side, intents.c.reserved_notional).where(
                 intents.c.session_date == day, intents.c.phase == "ENTRY")).mappings().all()
-            if (len(rows) >= max_total or sum(row["side"] == side for row in rows) >= max_per_side or
+            if (any(row["symbol"] == symbol for row in rows) or
+                    len(rows) >= max_total or sum(row["side"] == side for row in rows) >= max_per_side or
                     sum(Decimal(row["reserved_notional"]) for row in rows) + notional > gross_cap):
                 return None
             tag, stamp = uuid.uuid4().hex, at
@@ -153,7 +149,7 @@ class LiveLedger:
             return {"tag": tag, "symbol": symbol, "phase":"EXIT", "side": side, "quantity": qty}
 
     def mark_submission_unknown(self, tag: str, at: datetime) -> None:
-        with self.lock, self.engine.begin() as db:
+        with self.engine.begin() as db:
             row = db.execute(select(intents.c.state).where(intents.c.tag == tag).with_for_update()).first()
             if not row or row.state != "RESERVED":
                 raise ValueError("Intent already submitted or unknown")

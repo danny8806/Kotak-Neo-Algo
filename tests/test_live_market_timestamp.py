@@ -3,6 +3,7 @@
 Synthetic binary Dhan packets and explicitly fake broker/feed objects; no
 network access, credentials, or live order execution.
 """
+import json
 import struct
 import unittest
 from datetime import datetime, timedelta
@@ -27,6 +28,29 @@ class TickerExchangeTimestampTests(unittest.TestCase):
         self.assertEqual(result["security_id"],"1333")
         self.assertAlmostEqual(result["ltp"],101.25,places=3)
         self.assertEqual(datetime.fromisoformat(result["exchange_timestamp"]),trade)
+
+    def test_wire_float_does_not_invent_a_sub_paise_price(self):
+        trade=datetime(2026,11,4,9,16,tzinfo=IST)
+        self.assertEqual(parse_ticker(ticker_packet(price=100.10,last_trade_at=trade))["ltp"],100.10)
+
+    def test_subscription_added_while_connecting_is_sent_on_open(self):
+        ticker=LiveTicker(type("Dhan",(),{"websocket_url":lambda _:"wss://example.invalid"})(),
+                          {"HDFCBANK":"1333"},lambda _:None)
+        sent=[]
+        def fake_ws(_url,*,on_open,**_callbacks):
+            class Socket:
+                def send(self,message):
+                    sent.append(json.loads(message))
+                def run_forever(self,**_kwargs):
+                    ticker.add_symbols({"TCS":"11536"})
+                    if sent:
+                        raise AssertionError("Subscribe attempted before WebSocket opened")
+                    on_open(self)
+                    ticker.stop_event.set()
+            return Socket()
+        with patch("websocket.WebSocketApp",side_effect=fake_ws):
+            ticker._run()
+        self.assertEqual({item["SecurityId"] for item in sent[0]["InstrumentList"]},{"1333","11536"})
 
     def test_old_exchange_trade_not_relabelled_as_current_tick(self):
         trade=datetime(2026,11,4,9,16,0,tzinfo=IST)

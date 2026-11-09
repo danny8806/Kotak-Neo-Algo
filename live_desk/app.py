@@ -202,7 +202,7 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
         await websocket.accept()
         try:
             while True:
-                await websocket.send_json(desk.snapshot())
+                await websocket.send_json(await asyncio.to_thread(desk.snapshot))
                 await asyncio.sleep(2)
         except (WebSocketDisconnect,RuntimeError):
             return
