@@ -707,6 +707,9 @@ class LiveSupervisor:
                 self.disarm("Dhan feed token refreshed; re-arming required")
         if self.position_ticker and hasattr(self.position_ticker,"refresh_authentication"):
             self.position_ticker.refresh_authentication()
+        if self.broker is not None and (self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH):
+            self.blocked_stage="BROKER_BOOKS"
+            self.refresh_broker()
         self.blocked_stage="CURRENT_SESSION_SIGNALS"
         has_report=self._load_report()
         if has_report:
@@ -715,7 +718,7 @@ class LiveSupervisor:
                 self._map_instruments(now)
                 self.blocked_stage="OPENING_RANGE_AND_FEED"
                 self._build_runtime()
-                if self.ticker is None or self.opening_ranges:
+                if self.ticker is None or self.opening_ranges or now.time()>=self.policy.entry_cutoff:
                     self._map_late_research(now)
                     self.poll_ohlc()
                 out_of_window=(now.time()<FEED_WARMUP or now.time()>=self.policy.entry_cutoff)
@@ -741,11 +744,6 @@ class LiveSupervisor:
                     if self.runtime:self.runtime.enabled=False
                     self.status="NEEDS_KOTAK_CREDENTIALS"
                     self.blocked_stage="NEEDS_KOTAK_CREDENTIALS"
-        stage=self.blocked_stage
-        if self.broker is not None and (self.last_book_at is None or now-self.last_book_at>=BOOK_REFRESH):
-            self.blocked_stage="BROKER_BOOKS"
-            self.refresh_broker()
-            self.blocked_stage=stage
         self._refresh_vix_context(now)
         if self.armed and not self.ready():
             self.disarm("Broker or market data health degraded")
