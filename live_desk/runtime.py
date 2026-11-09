@@ -32,7 +32,7 @@ class LiveRuntime:
                  dhan_ids: dict[str, str], kotak_instruments: dict[str, KotakInstrument],
                  opening_ranges: dict[str, tuple[Decimal, Decimal]],
                  policy: LivePolicy, ledger: LiveLedger, broker,
-                 enabled: bool, clock=None, close_only: bool = False):
+                 enabled: bool, clock=None, close_only: bool = False, feed_is_current=None):
         symbols = {row["symbol"] for row in signals}
         if (not symbols or len(symbols) != len(signals) or
             symbols != set(dhan_ids) or symbols != set(kotak_instruments) or
@@ -58,6 +58,7 @@ class LiveRuntime:
         self.lock = threading.RLock()
         self._enabled = enabled
         self.close_only = close_only
+        self.feed_is_current = feed_is_current
         self.clock = clock or (lambda: datetime.now(IST))
         self.previous: dict[str, Decimal] = {}
         self.last_tick_at: dict[str, datetime] = {}
@@ -115,6 +116,11 @@ class LiveRuntime:
     def _clear_error(self,key):
         with self.lock:self._errors.pop(key,None)
 
+    def reset_crossing_baselines(self):
+        with self.lock:
+            self.previous.clear()
+            self.last_tick_at.clear()
+
     def on_tick(self, tick: dict) -> dict | None:
         """Process a real Dhan ticker packet after receipt; never infer a fill."""
         symbol = tick.get("symbol")
@@ -127,9 +133,9 @@ class LiveRuntime:
         except (ValueError,TypeError,ArithmeticError):return None
         if not price.is_finite() or price <= 0:
             return None
-        return self.on_market_tick(symbol,price,at,self.clock(),tick.get("received_ns"))
+        return self.on_market_tick(symbol,price,at,self.clock(),tick.get("received_ns"),tick.get("feed_generation"))
 
-    def on_market_tick(self, symbol, price, at, now, received_ns=None):
+    def on_market_tick(self, symbol, price, at, now, received_ns=None, feed_generation=None):
         """Process a supervisor-validated price with no second parsing pass."""
         local=at.astimezone(IST)
         if local.date()!=self.session_date or local.time()<time(9,16):
@@ -144,7 +150,8 @@ class LiveRuntime:
             previous = self.previous.get(symbol)
             self.previous[symbol] = price
             self.last_tick_at[symbol] = at
-            if not self._enabled or self.close_only or previous is None:
+            if (not self._enabled or self.close_only or previous is None or prior_time is None
+                    or now-prior_time>MAX_ENTRY_TICK_AGE):
                 return None
             if symbol in self.pending_entries or symbol in self.reserved_symbols:
                 return None
@@ -158,14 +165,15 @@ class LiveRuntime:
                 return None
             direction = "BUY" if side == "LONG" else "SELL"
             started=received_ns if received_ns is not None else wall_time.perf_counter_ns()
-            future = self.submissions.submit(self._reserve_and_submit, symbol, direction, quantity, price, at,started)
+            future = self.submissions.submit(
+                self._reserve_and_submit,symbol,direction,quantity,price,at,started,feed_generation)
             self.pending_entries.add(symbol)
             self.pending.add(future)
             future.add_done_callback(lambda done: self._submission_done(done, symbol))
             return {"symbol": symbol, "state": "SUBMISSION_QUEUED"}
 
-    def _reserve_and_submit(self, symbol, direction, quantity, price, at, received_ns):
-        if not self._entry_may_send(at):
+    def _reserve_and_submit(self, symbol, direction, quantity, price, at, received_ns, feed_generation):
+        if not self._entry_may_send(at,feed_generation):
             return
         # PostgreSQL still owns deduplication and every exposure limit.
         intent = self.ledger.reserve_entry(
@@ -175,7 +183,7 @@ class LiveRuntime:
             gross_cap=self.policy.gross_cap, max_total=self.policy.max_positions)
         if intent:
             with self.lock:self.reserved_symbols.add(symbol)
-            self._submit_and_reconcile(intent,at,received_ns=received_ns)
+            self._submit_and_reconcile(intent,at,received_ns=received_ns,feed_generation=feed_generation)
 
     def _submission_done(self, future: Future, symbol: str | None = None) -> None:
         with self.lock:
@@ -194,21 +202,23 @@ class LiveRuntime:
         _, unfinished = wait(pending, timeout=timeout)
         return not unfinished
 
-    def _entry_may_send(self, at: datetime) -> bool:
+    def _entry_may_send(self, at: datetime, feed_generation=None) -> bool:
         now = self.clock().astimezone(IST)
         return (self.enabled and not self.close_only and now.date() == self.session_date
                 and time(9,16) <= now.time() < self.policy.entry_cutoff
-                and timedelta(seconds=-2) <= now - at.astimezone(IST) <= MAX_ENTRY_TICK_AGE)
+                and timedelta(seconds=-2) <= now - at.astimezone(IST) <= MAX_ENTRY_TICK_AGE
+                and (self.feed_is_current is None or self.feed_is_current(feed_generation)))
 
-    def _submit_and_reconcile(self, intent: dict, at: datetime, *, received_ns=None) -> dict:
+    def _submit_and_reconcile(self, intent: dict, at: datetime, *, received_ns=None,
+                              feed_generation=None) -> dict:
         tag = intent["tag"]
         is_entry = intent.get("phase", "ENTRY") == "ENTRY"
-        if is_entry and not self._entry_may_send(at):
+        if is_entry and not self._entry_may_send(at,feed_generation):
             self.ledger.mark_not_submitted(tag, self.clock())
             return {"tag": tag, "state": "ABORTED"}
         # Persist before network I/O, without holding the tick reader's lock.
         self.ledger.mark_submission_unknown(tag, self.clock())
-        if is_entry and not self._entry_may_send(at):
+        if is_entry and not self._entry_may_send(at,feed_generation):
             self.ledger.mark_not_submitted(tag, self.clock(), committed_for_send=True)
             return {"tag": tag, "state": "ABORTED"}
         result=None
@@ -216,7 +226,7 @@ class LiveRuntime:
 
         def before_send():
             nonlocal dispatch_ns
-            if not self._entry_may_send(at):
+            if not self._entry_may_send(at,feed_generation):
                 return False
             dispatch_ns=wall_time.perf_counter_ns()
             return True

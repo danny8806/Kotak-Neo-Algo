@@ -172,6 +172,26 @@ class PnlSnapshotTests(unittest.TestCase):
         self.assertTrue(self.desk.snapshot()["broker_connected"])
         self.assertEqual(self.broker.order_calls,0)
 
+    def test_reconnected_feed_requires_fresh_baselines_and_rearming(self):
+        from unittest.mock import Mock
+
+        desk=self.desk
+        desk.dhan_ids={"TESTA":"123"}
+        desk.runtime=Mock()
+        desk.runtime.errors=[]
+        desk.ticker=Mock()
+        desk.ticker.snapshot.return_value={"state":"CONNECTED","connection_generation":1}
+        desk.on_tick({"symbol":"TESTA","ltp":100,"timestamp":self.now,"feed_generation":1})
+        desk.armed=True
+        desk._orb_previous["TESTA"]=100
+        desk.ticker.snapshot.return_value={"state":"CONNECTED","connection_generation":2}
+        self.assertIn("FRESH_QUOTES",desk.snapshot()["readiness_blockers"])
+        desk.on_tick({"symbol":"TESTA","ltp":101,"timestamp":self.now,"feed_generation":2})
+        self.assertFalse(desk.armed)
+        desk.runtime.reset_crossing_baselines.assert_called_once()
+        self.assertNotIn("TESTA",desk._orb_previous)
+        self.assertNotIn("FRESH_QUOTES",desk.snapshot()["readiness_blockers"])
+
     def test_snapshot_expires_quote_even_between_broker_refreshes(self):
         self.desk.quote_data={'TESTA':{'ltp':105,'tick_at':self.now.isoformat()}}
         self.assertEqual(self.desk.snapshot()['pnl']['gross_total'],15)

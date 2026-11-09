@@ -337,6 +337,32 @@ class ProductionReplayTests(unittest.TestCase):
         self.assertEqual(broker.calls,[])
         self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"],"ABORTED")
 
+    def test_reconnect_during_broker_pacing_aborts_old_feed_order(self):
+        broker=ReplayExchange()
+        session=KotakSession(lambda:broker,clock=lambda:NOW)
+        self.assertTrue(session.ensure_authenticated())
+        runtime=self.runtime(session)
+        feed=LiveTicker(None,{"TESTA":"123"},lambda _:None)
+        feed.subscribed_socket=object()
+        feed._set(state="CONNECTED",connection_generation=1)
+        runtime.feed_is_current=feed.connection_is_current
+
+        def reconnect_during_pacing():
+            feed._set(state="RECONNECTING")
+            self.assertFalse(feed.connection_is_current(1))
+            feed.subscribed_socket=object()
+            feed._set(state="CONNECTED",connection_generation=2)
+
+        with patch.object(session.order_limiter,"acquire",side_effect=reconnect_during_pacing):
+            runtime.on_tick({"symbol":"TESTA","ltp":"100","timestamp":NOW,"feed_generation":1})
+            self.assertIsNotNone(runtime.on_tick({
+                "symbol":"TESTA","ltp":"101","timestamp":NOW,"feed_generation":1}))
+            self.assertTrue(runtime.wait_for_submissions())
+        self.assertTrue(feed.connection_is_current(2))
+        self.assertEqual(broker.calls,[])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"],"ABORTED")
+        self.assertEqual(runtime.dispatch_latency()["samples"],0)
+
     def test_cutoff_cancels_once_then_eod_exits_late_confirmed_partial_fill(self):
         broker=ReplayExchange()
         runtime=self.runtime(broker)

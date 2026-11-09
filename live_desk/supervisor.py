@@ -101,6 +101,7 @@ class LiveSupervisor:
         self._orb_previous={}
         self._orb_last_tick={}
         self.quote_data={}
+        self._entry_generation=None
         self.last_quote_at=None
         self.last_book_at=None
         self.last_ohlc_at=None
@@ -236,6 +237,7 @@ class LiveSupervisor:
             self._orb_last_tick={}
             self.quote_data={}
             self.last_book_at=None
+            self._entry_generation=None
             self.last_quote_at=None
             self.last_ohlc_at=None
             self.last_vix_attempt=None
@@ -431,7 +433,8 @@ class LiveSupervisor:
         runtime=LiveRuntime(
             session_date=now.date(),signals=self.report["signals"],dhan_ids=self.dhan_ids,
             kotak_instruments=self.kotak_ids,opening_ranges=dict(self.opening_ranges),
-            policy=self.policy,ledger=self.ledger,broker=self.broker,enabled=False,clock=self.now)
+            policy=self.policy,ledger=self.ledger,broker=self.broker,enabled=False,clock=self.now,
+            feed_is_current=getattr(self.ticker,"connection_is_current",None))
         with self.lock:
             received_at=self.now()
             for symbol in self.opening_ranges:
@@ -571,7 +574,17 @@ class LiveSupervisor:
         try:value=Decimal(str(tick.get("ltp")))
         except (ValueError,TypeError,ArithmeticError):return
         if not value.is_finite() or value<=0:return
+        generation=tick.get("feed_generation")
         with self.lock:
+            if generation is not None and generation!=self._entry_generation:
+                if self._entry_generation is not None:
+                    if generation<self._entry_generation:return
+                    self._orb_previous.clear()
+                    self._orb_last_tick.clear()
+                    self.last_quote_at=None
+                    if self.runtime:self.runtime.reset_crossing_baselines()
+                    if self.armed:self.disarm("Dhan feed reconnected; re-arming required")
+                self._entry_generation=generation
             previous=self.quote_data.get(symbol,{})
             if previous.get("tick_at") and ts.astimezone(IST)<datetime.fromisoformat(previous["tick_at"]):return
             self.quote_data[symbol]={**previous,"ltp":float(value),
@@ -581,7 +594,7 @@ class LiveSupervisor:
             if self.runtime:self.runtime.enabled=ready
             runtime=self.runtime
         if runtime:
-            runtime.on_market_tick(symbol,value,ts,now,tick.get("received_ns"))
+            runtime.on_market_tick(symbol,value,ts,now,tick.get("received_ns"),generation)
         self._observe_orb_crossing(symbol,value,ts,now)
         # Position exits follow the configured 15:15 IST square-off policy.
         # Loss limits disarm new entries; they do not create an implicit stop.
@@ -598,7 +611,8 @@ class LiveSupervisor:
             previous=self._orb_previous.get(symbol)
             self._orb_previous[symbol]=price
             self._orb_last_tick[symbol]=tick_at
-            if previous is None or symbol in self.orb_events:
+            if (previous is None or previous_at is None or now-previous_at>MAX_ENTRY_TICK_AGE
+                    or symbol in self.orb_events):
                 return
             signal=self.report and next((x for x in self.report.get("signals",[])
                                          if x["symbol"]==symbol),None)
@@ -635,7 +649,8 @@ class LiveSupervisor:
         if not wanted or set(self.opening_ranges)!=wanted:blocked.append("OPENING_RANGE")
         ticker=self.ticker.snapshot() if self.ticker else {}
         if ticker.get("state")!="CONNECTED" or ticker.get("error"):blocked.append("MARKET_FEED")
-        if self.last_quote_at is None or not timedelta(0)<=now-self.last_quote_at<=MAX_ENTRY_TICK_AGE:
+        if (self.last_quote_at is None or not timedelta(0)<=now-self.last_quote_at<=MAX_ENTRY_TICK_AGE
+                or ticker.get("connection_generation",self._entry_generation)!=self._entry_generation):
             blocked.append("FRESH_QUOTES")
         if self.last_book_at is None or not timedelta(0)<=now-self.last_book_at<=BOOK_EXPIRY:
             blocked.append("BROKER_BOOKS")

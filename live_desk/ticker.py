@@ -61,13 +61,21 @@ class LiveTicker:
         self.thread=None
         self.socket=None
         self.token_created_at=None
-        self.status={"state":"NOT_STARTED","last_tick":None,"error":None}
+        self.status={"state":"NOT_STARTED","last_tick":None,"error":None,"connection_generation":0}
 
     def snapshot(self):
         with self.lock:return dict(self.status)
 
+    def connection_is_current(self,generation):
+        with self.lock:
+            return (not self.stop_event.is_set() and self.subscribed_socket is not None and self.status["state"]=="CONNECTED"
+                    and not self.status["error"] and generation==self.status["connection_generation"])
+
     def _set(self,**updates):
-        with self.lock:self.status.update(updates)
+        with self.lock:
+            if "state" in updates and updates["state"]!="CONNECTED":
+                self.subscribed_socket=None
+            self.status.update(updates)
 
     def add_symbols(self,securities:dict[str,str]):
         """Subscribe newly mapped NSE_EQ symbols on the existing Dhan socket."""
@@ -106,6 +114,7 @@ class LiveTicker:
             ws=self.socket
             if changed:
                 self.token_created_at=getattr(self.client,"token_created_at",None)
+                self.subscribed_socket=None
                 self.status.update(state="RECONNECTING",error="Dhan token refreshed")
         if changed and ws:
             ws.close()
@@ -141,7 +150,8 @@ class LiveTicker:
                         self._subscribe(ws,ids)
                         with self.lock:
                             self.subscribed_socket=ws
-                            self.status.update(state="CONNECTED",error=None)
+                            self.status.update(state="CONNECTED",error=None,
+                                               connection_generation=self.status["connection_generation"]+1)
                 def on_message(ws,message):
                     nonlocal retry
                     if not isinstance(message, bytes):
@@ -160,6 +170,7 @@ class LiveTicker:
                             continue
                         with self.lock:
                             symbol=self.map.get(security_id)
+                            generation=self.status["connection_generation"]
                         if symbol is None:
                             continue
                         retry=1
@@ -167,9 +178,13 @@ class LiveTicker:
                         exchange_at=raw_at-self.timestamp_offset
                         tick={"security_id":security_id,"ltp":price,"segment_code":segment,
                               "exchange_timestamp":raw_at.isoformat(),"symbol":symbol,
-                              "timestamp":exchange_at,"received_at":now,"received_ns":received_ns}
-                        self._set(last_tick=now.isoformat(),error=None,
-                                  last_exchange_trade_at=exchange_at.isoformat(),state="CONNECTED")
+                              "timestamp":exchange_at,"received_at":now,"received_ns":received_ns,
+                              "feed_generation":generation}
+                        with self.lock:
+                            self.status.update(last_tick=now.isoformat(),
+                                               last_exchange_trade_at=exchange_at.isoformat())
+                            if self.subscribed_socket is ws:
+                                self.status.update(state="CONNECTED",error=None)
                         try:
                             self.on_tick(tick)
                         except Exception as exc:

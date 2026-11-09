@@ -2,6 +2,7 @@
 import unittest
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from random import Random
 from zoneinfo import ZoneInfo
 
 from live_desk.kotak_gateway import place_kotak_order
@@ -62,6 +63,39 @@ class LiveBoundaryTests(unittest.TestCase):
                 self.assertEqual(candidate_entry(**decision), expected)
                 self.assertIsNone(candidate_entry(**decision, reserved_gross=Decimal("250000.00")))
                 self.assertIsNone(candidate_entry(**decision, open_positions=3))
+
+    def test_sizing_matches_integer_paise_model_across_20000_cases(self):
+        rng = Random(9301515)
+        opening = datetime(2026, 11, 5, 9, 16, tzinfo=IST)
+        offsets = (-1, 0, 1, 839_999_999, 840_000_000, 840_000_001)
+
+        def rupees(paise):
+            return Decimal(paise) / 100
+
+        for i in range(20_000):
+            side = ("LONG", "SHORT")[(i // len(offsets)) % 2]
+            offset = offsets[i % len(offsets)]
+            edge = rng.choice((1, 100, 10_000, 2_500_000, 100_000_000))
+            previous, price = (max(1, edge + rng.randrange(-3, 4)) for _ in range(2))
+            allocation = rng.randrange(100_000, 50_000_001)
+            cap = allocation * rng.randrange(1, 7)
+            max_long, max_short = rng.randrange(1, 6), rng.randrange(1, 6)
+            max_total = rng.randrange(1, max_long + max_short + 1)
+            longs, shorts = rng.randrange(0, 6), rng.randrange(0, 6)
+            total, reserved = rng.randrange(0, 11), rng.randrange(cap + 1)
+            policy = LivePolicy(time(9, 30), time(15, 15), max_long, max_short, max_total,
+                                rupees(allocation), rupees(cap), "end")
+            result = candidate_entry(side=side, previous_price=rupees(previous), price=rupees(price),
+                                     orb_high=rupees(edge), orb_low=rupees(edge),
+                                     tick_at=opening + timedelta(microseconds=offset), policy=policy,
+                                     open_long=longs, open_short=shorts, open_positions=total,
+                                     reserved_gross=rupees(reserved))
+            shares = allocation // price
+            crosses = (previous <= edge < price and longs < max_long if side == "LONG"
+                       else previous >= edge > price and shorts < max_short)
+            expected = shares if (0 <= offset < 840_000_000 and crosses and total < max_total
+                                  and shares and reserved + price * shares <= cap) else None
+            self.assertEqual(result, expected, f"seed=9301515 case={i}")
 
     def test_kotak_order_boundary_requires_exact_mapped_instrument(self):
         class Client:
