@@ -112,7 +112,7 @@ class LiveTerminalTests(unittest.TestCase):
         login_page=client.get("/login")
         self.assertEqual(login_page.status_code,200)
         self.assertIn('<base href="/kotak-live/"/>',login_page.text)
-        self.assertIn("route('/api/auth/login')",login_page.text)
+        self.assertRegex(login_page.text, r"route\((['\"])/api/auth/login\1\)")
         auth=client.post("/api/auth/login",json={"password":PASSWORD})
         self.assertEqual(auth.status_code,200)
         cookie=auth.cookies.get("kotak_live_session")
