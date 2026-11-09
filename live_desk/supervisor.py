@@ -566,25 +566,19 @@ class LiveSupervisor:
         """
         if (not self.allowed or now.time()<self.policy.exit_time or now.weekday()>=5):
             return
+        if self.armed:
+            self.disarm("End-of-day square-off started")
         intent_rows=self.ledger.snapshot(now.date())
         exited={r["symbol"]:r["filled_quantity"] for r in intent_rows if r["phase"]=="EXIT"}
-        entries={r["symbol"]:r for r in intent_rows
-                 if r["phase"]=="ENTRY" and r["filled_quantity"]>exited.get(r["symbol"],0)}
-        if not entries:
+        entries=[r for r in intent_rows if r["phase"]=="ENTRY" and (
+            r["filled_quantity"]>exited.get(r["symbol"],0) or
+            r["state"] in {"SUBMISSION_UNKNOWN","ACKNOWLEDGED","PARTIAL","CANCEL_PENDING"})]
+        if not entries or self.broker is None:
             return
-        if not self.last_book_at or now-self.last_book_at>BOOK_EXPIRY:
-            raise RuntimeError("Broker position book stale; cannot safely submit exit orders")
-        positions={p["symbol"]:p for p in self.broker_positions}
-        for symbol,entry in entries.items():
-            position=positions.get(symbol)
-            remaining=entry["filled_quantity"]-exited.get(symbol,0)
-            expected=remaining if entry["side"]=="BUY" else -remaining
-            if position is None or int(position["net_quantity"])!=expected:
-                raise RuntimeError("Kotak position reconciliation failed; exit blocked")
         if self.runtime is None:
             # Recover a close-only runtime from persisted bot intents. Dummy Dhan
             # IDs/ORB values are inert because enabled=False and EOD calls exit_due.
-            rows=[r for r in intent_rows if r["phase"]=="ENTRY" and r["state"] not in {"REJECTED"}]
+            rows=entries
             symbols=[r["symbol"] for r in rows]
             kotak={s:lookup_kotak_equity(self.broker,s) for s in symbols}
             self.runtime=LiveRuntime(session_date=now.date(),
@@ -593,13 +587,12 @@ class LiveSupervisor:
                 opening_ranges={s:(Decimal("1"),Decimal("1")) for s in symbols},
                 policy=self.policy,ledger=self.ledger,broker=self.broker,enabled=False,
                 clock=self.clock,close_only=True)
-        self.runtime.exit_due(now)
+        self.runtime.exit_due(now, read_positions=lambda: broker_view.positions(self.broker))
 
     def cycle(self):
         now=self.now()
         if self.session_date!=now.date().isoformat():
             self._new_day(now.date().isoformat())
-        self._ensure_dhan_auth()
         # Monitor the actual Kotak brokerage account even when news is missing.
         # No signals must NEVER be interpreted as fabricated positions.
         kotak_missing=False
@@ -620,6 +613,8 @@ class LiveSupervisor:
                 self.status="NEEDS_KOTAK_CREDENTIALS"
         elif self.broker is None:
             self.broker=self.kotak_factory()
+        self._manage_authorized_exits(now)
+        self._ensure_dhan_auth()
         # Off-session signals may arrive at any time and are mapped for the
         # dashboard. No ORB/feed starts outside the entry window.
         if now.weekday()>=5:
@@ -678,7 +673,6 @@ class LiveSupervisor:
                     if self.runtime:self.runtime.enabled=False
                     self.status="NEEDS_KOTAK_CREDENTIALS"
                     self.blocked_stage="NEEDS_KOTAK_CREDENTIALS"
-        self._manage_authorized_exits(now)
         if self.armed and not self.ready():
             self.disarm("Broker or market data health degraded")
         # Entries cannot be recreated after restart without manual arming.

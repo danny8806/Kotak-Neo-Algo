@@ -431,6 +431,7 @@ class LiveTerminalTests(unittest.TestCase):
             "filled_quantity":3,"average_fill_price":"100","trading_symbol":"TESTA-EQ"},TODAY)
         self.supervisor.allowed=True
         self.supervisor.session_authorized=False
+        self.supervisor.broker=self.broker
         self.supervisor.runtime=None
         self.supervisor.last_book_at=TODAY.replace(hour=15,minute=19,second=55)
         self.supervisor.broker_positions=parse_positions(self.broker,{})

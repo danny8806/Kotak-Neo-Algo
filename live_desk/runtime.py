@@ -216,9 +216,10 @@ class LiveRuntime:
                 except Exception:
                     self._error(row["tag"],f"{row['symbol']}: broker reconciliation pending")
 
-    def exit_due(self, at: datetime) -> list[dict]:
+    def exit_due(self, at: datetime, *, read_positions=None) -> list[dict]:
         if at.astimezone(IST).date() != self.session_date or at.astimezone(IST).time() < self.policy.exit_time:
             return []
+        self.enabled = False
         if not self.wait_for_submissions(timeout=30.0):
             self._error("EOD_PENDING","EOD exit blocked: Kotak submissions still in flight")
             return []
@@ -239,9 +240,33 @@ class LiveRuntime:
                 self.ledger.apply_broker_report(report, at)
             except Exception as exc:
                 self._error(row["tag"],f'{row["symbol"]}: entry cancellation/reconciliation pending ({type(exc).__name__})')
+        rows = self.ledger.snapshot(self.session_date)
+        exits = {row["symbol"]: row for row in rows if row["phase"] == "EXIT"}
+        candidates = []
+        for entry in rows:
+            if entry["phase"] != "ENTRY" or entry["state"] not in {"FILLED", "PARTIAL_CANCELLED"}:
+                continue
+            symbol = entry["symbol"]
+            prior = exits.get(symbol)
+            if prior:
+                if prior["state"] in {"REJECTED", "PARTIAL_CANCELLED"} and prior["filled_quantity"] < entry["filled_quantity"]:
+                    self._error(f"EOD:{symbol}", f"{symbol}: exit ended with shares remaining. Manual action required.")
+                continue
+            if entry["filled_quantity"] > 0 and symbol in self.signals:
+                candidates.append(entry)
+        # Read positions after cancellations so late entry fills are included.
+        positions = read_positions() if candidates and read_positions is not None else None
         futures = []
         with self.lock:
-            for symbol in self.signals:
+            for entry in candidates:
+                symbol = entry["symbol"]
+                if positions is not None:
+                    matches = [row for row in positions if row["symbol"] == symbol and row["product"] == "MIS"]
+                    expected = entry["filled_quantity"] if entry["side"] == "BUY" else -entry["filled_quantity"]
+                    if len(matches) != 1 or matches[0]["net_quantity"] != expected:
+                        self._error(f"EOD:{symbol}", f"{symbol}: Kotak MIS quantity does not match bot fills. Manual action required.")
+                        continue
+                    self._clear_error(f"EOD:{symbol}")
                 intent = self.ledger.reserve_exit(session_date=self.session_date, symbol=symbol, at=at)
                 if intent:
                     future = self.submissions.submit(self._submit_and_reconcile, intent, at)
