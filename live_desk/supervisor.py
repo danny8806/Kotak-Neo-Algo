@@ -13,6 +13,8 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from neo_api_client.exceptions import ApiException
+from requests import RequestException
 from sqlalchemy import select, text
 from bridge.app import reports, signal_batches
 from scripts.validate_signals import validate
@@ -480,12 +482,20 @@ class LiveSupervisor:
         positions_job=self.preparation.submit(broker_view.positions,self.broker,current_quotes)
         cash_job=self.preparation.submit(self._broker_cash)
         try:
-            order_rows=book_rows(self.broker.order_report(),"orders")
-            trade_rows=book_rows(self.broker.trade_report(),"trades")
-        finally:
-            wait((positions_job,cash_job))
-        position=positions_job.result()
-        cash=cash_job.result()
+            try:
+                order_rows=book_rows(self.broker.order_report(),"orders")
+                trade_rows=book_rows(self.broker.trade_report(),"trades")
+            finally:
+                wait((positions_job,cash_job))
+            position=positions_job.result()
+            cash=cash_job.result()
+        except (ApiException, RequestException, ArithmeticError, RuntimeError, ValueError) as exc:
+            with self.lock:
+                self.last_book_at=None
+                if self.armed:
+                    self.disarm("Kotak account books unavailable")
+            LOG.warning("Kotak book refresh failed (%s)",type(exc).__name__)
+            return
         books=(order_rows,trade_rows)
         orders=broker_view.orders(self.broker,rows=order_rows)
         fills=broker_view.fills(self.broker,rows=trade_rows)

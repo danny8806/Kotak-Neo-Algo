@@ -236,6 +236,30 @@ class PnlSnapshotTests(unittest.TestCase):
         state=self.desk.snapshot()
         self.assertEqual(len(state['orders']),151);self.assertEqual(len(state['fills']),151)
 
+    def test_temporary_broker_book_failure_blocks_orders_but_keeps_signal_processing(self):
+        self.desk.session_date = self.now.date().isoformat()
+        self.desk.armed = True
+        from neo_api_client.exceptions import ApiException
+        failures = ({"return_value": {"stat": "unavailable"}},
+                    {"side_effect": ApiException(status=0, reason="Request timeout")})
+        with patch.object(self.desk, "_ensure_dhan_auth"), \
+             patch.object(self.desk, "_refresh_vix_context"), \
+             patch.object(self.desk, "_load_report", return_value=False) as load:
+            for index, failure in enumerate(failures):
+                self.now += timedelta(seconds=6)
+                with self.subTest(failure=failure), patch.object(self.broker, "trade_report", **failure):
+                    self.desk.cycle()
+                    state = self.desk.snapshot()
+                    self.assertFalse(state["armed"])
+                    self.assertFalse(state["broker_connected"])
+                    self.assertIn("BROKER_BOOKS", state["readiness_blockers"])
+                    self.assertEqual(load.call_count, index * 2 + 1)
+                self.desk.cycle()
+                self.assertTrue(self.desk.snapshot()["broker_connected"])
+                self.assertFalse(self.desk.armed)
+                self.assertEqual(load.call_count, index * 2 + 2)
+        self.assertEqual(self.broker.order_calls, 0)
+
     def test_negative_funds_blocks_entries_without_hiding_account_books(self):
         self.broker.limits=lambda:{'stat':'Ok','Net':'-1.00'}
         self.desk.refresh_broker();state=self.desk.snapshot()
