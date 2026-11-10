@@ -45,7 +45,8 @@ class LiveSupervisor:
         self.database=signal_engine
         self.allowed_symbols=set(allowed_symbols) if allowed_symbols is not None else None
         self.clock=clock or (lambda:datetime.now(IST))
-        self.policy=load_policy(Path(policy_path or Path(__file__).with_name("policy.json")))
+        self.policy=load_policy(Path(policy_path or Path(__file__).with_name("policy.json")),
+                                entry_quantity_cap=os.getenv("LIVE_ENTRY_QUANTITY_CAP", "").strip())
         ledger_database = ledger_path or os.getenv("LIVE_DATABASE_URL") or os.getenv("SIGNAL_DATABASE_URL")
         if not ledger_database:
             raise RuntimeError("Set LIVE_DATABASE_URL to a PostgreSQL connection URL")
