@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo('Asia/Kolkata')
-SYMBOL_RE = re.compile(r'^[A-Z][A-Z0-9&._-]{0,29}$')
+SYMBOL_RE = re.compile(r'^(?=[A-Z0-9&._-]*[A-Z])[A-Z0-9][A-Z0-9&._-]{0,29}$')
 TOP_KEYS = {'schema_version', 'status', 'market', 'timezone', 'session_date',
             'news_cutoff_at', 'generated_at', 'execution_enabled', 'signals',
             'reason', 'sample'}

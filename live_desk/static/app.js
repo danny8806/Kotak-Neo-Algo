@@ -128,14 +128,16 @@ function settingsPreview(){
  const perStock=paise("settingAllocation"), gross=paise("settingGross"), slots=number("settingMaxPositions");
  const validCapital=perStock>0&&gross>=perStock&&slots>0;
  const cash=stateStale?null:current?.available_cash;
+ const quantityCap=current?.strategy?.entry_quantity_cap;
  text("settingsPlanned",money(validCapital?Math.min(gross,slots*perStock)/100:null));
  text("settingsSlots",validCapital?Math.min(slots,Math.floor(gross/perStock)):null);
  text("settingsFunds",money(cash));
  text("settingsFundingNote",cash===null||cash===undefined?"Waiting for fresh Kotak funds.":
   gross>0&&gross>Math.round(Number(cash)*100)?"Available funds are below the gross cap. Entries stay blocked by the funds check.":
+  quantityCap?"Entry quantity is capped at "+quantityCap+" per stock.":
   "Full-size allocations use the entire per-stock budget. Actual quantities round down.");
  const price=paise("settingsPrice"),shares=price>0&&perStock>0&&$("settingsPrice").validity.valid?
-  Math.floor(perStock/price):null;
+  Math.min(Math.floor(perStock/price),quantityCap??Infinity):null;
  text("settingsShares",shares===null?"Enter a price to estimate whole shares per stock.":
   fmt(shares,0)+(shares===1?" share":" shares")+" · "+money(shares*price/100)+" reference notional");
  const seconds=id=>{
@@ -146,6 +148,7 @@ function settingsPreview(){
  if(gross>0&&gross<perStock)issue="Gross cap must cover at least one stock allocation.";
  else if(slots>number("settingMaxLong")+number("settingMaxShort"))issue="Maximum stocks cannot exceed the combined LONG and SHORT limits.";
  else if(seconds("settingExit")<=seconds("settingCutoff"))issue="Square-off must follow the entry cutoff.";
+ else if($("settingExit").validity.rangeOverflow)issue="Square-off must be no later than 15:00 IST.";
  text("settingsValidation",issue);
  $("settingsValidation").hidden=!issue;
  return !issue;

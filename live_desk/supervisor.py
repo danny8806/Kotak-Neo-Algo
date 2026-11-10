@@ -23,7 +23,7 @@ from live_desk.kotak_auth import KotakSession
 from live_desk.kotak_instruments import load_kotak_equity_master, lookup_kotak_equity
 from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
-from live_desk.strategy import LATEST_ENTRY_CUTOFF, load_policy
+from live_desk.strategy import LATEST_ENTRY_CUTOFF, LATEST_EXIT_TIME, load_policy
 from live_desk.orb import opening_range
 from live_desk.runtime import MAX_ENTRY_TICK_AGE, LiveRuntime
 from live_desk.ticker import LiveTicker
@@ -141,8 +141,8 @@ class LiveSupervisor:
                 raise ValueError("Settings have invalid or missing values") from exc
             if cutoff>LATEST_ENTRY_CUTOFF:
                 raise ValueError("Entry cutoff cannot be later than 09:30 IST")
-            if not time(9,16)<proposed.entry_cutoff<proposed.exit_time<=time(15,30):
-                raise ValueError("Entry cutoff must follow 09:16 and precede the 15:30 exit limit")
+            if not time(9,16)<cutoff<exit_at<=LATEST_EXIT_TIME:
+                raise ValueError("Exit must follow the entry cutoff and be no later than 15:00 IST")
             if (not 1<=proposed.max_long<=5 or not 1<=proposed.max_short<=5 or
                 not 1<=proposed.max_positions<=10 or
                 proposed.max_positions>proposed.max_long+proposed.max_short):
@@ -940,6 +940,7 @@ class LiveSupervisor:
                             "exit_time":self.policy.exit_time.isoformat(),
                             "allocation_per_position":str(self.policy.per_position),
                             "gross_cap":str(self.policy.gross_cap),
+                            "entry_quantity_cap":self.policy.entry_quantity_cap,
                             "max_long":self.policy.max_long,"max_short":self.policy.max_short,
                             "max_positions":self.policy.max_positions,
                             "tick_stop_pct":None},

@@ -10,7 +10,7 @@ from live_desk.runtime import LiveRuntime
 from live_desk.supervisor import LiveSupervisor
 
 
-AT = datetime(2026, 11, 9, 15, 15, tzinfo=IST)
+AT = datetime(2026, 11, 9, 15, 0, tzinfo=IST)
 
 
 def entry(symbol, state, filled, side="BUY"):

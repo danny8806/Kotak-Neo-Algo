@@ -12,6 +12,7 @@ from live_desk.dhan_data import IST
 
 
 LATEST_ENTRY_CUTOFF = time(9, 30)
+LATEST_EXIT_TIME = time(15)
 
 
 @dataclass(frozen=True)
@@ -27,9 +28,11 @@ class LivePolicy:
     entry_quantity_cap: int | None = None
 
     def __post_init__(self):
-        # Older persisted settings must not widen the entry window.
+        # Apply current deadlines to settings persisted by older releases.
         if self.entry_cutoff > LATEST_ENTRY_CUTOFF:
             object.__setattr__(self, "entry_cutoff", LATEST_ENTRY_CUTOFF)
+        if self.exit_time > LATEST_EXIT_TIME:
+            object.__setattr__(self, "exit_time", LATEST_EXIT_TIME)
 
 
 def load_policy(path: Path, *, entry_quantity_cap: str = "") -> LivePolicy:

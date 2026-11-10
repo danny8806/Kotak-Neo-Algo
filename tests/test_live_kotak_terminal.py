@@ -155,12 +155,12 @@ class LiveTerminalTests(unittest.TestCase):
         self.login()
         headers={"Origin":"http://testserver"}
         payload={"per_position":"125500.25","max_positions":"3","gross_cap":"300000.25",
-                 "max_long":"2","max_short":"1","entry_cutoff":"09:27","exit_time":"15:10"}
+                 "max_long":"2","max_short":"1","entry_cutoff":"09:27","exit_time":"14:55"}
         response=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(response.status_code,200,response.text)
         expected={"allocation_per_position":"125500.25","gross_cap":"300000.25",
                   "max_positions":3,"max_long":2,"max_short":1,
-                  "entry_cutoff":"09:27:00","exit_time":"15:10:00"}
+                  "entry_cutoff":"09:27:00","exit_time":"14:55:00"}
         self.assertEqual(response.json()["strategy"],expected)
         restarted=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=self.clock,
                                  kotak_factory=lambda:self.broker)
@@ -185,7 +185,7 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertEqual(self.broker.order_calls,0)
         invalid=[
             {"max_long":"6"},{"max_positions":"4"},{"max_short":1.5},{"max_long":True},
-            {"entry_cutoff":"09:31"},{"exit_time":"09:25"},{"exit_time":"15:15+05:30"},
+            {"entry_cutoff":"09:31"},{"exit_time":"09:25"},{"exit_time":"15:00:01"},{"exit_time":"15:15+05:30"},
             {"gross_cap":"125500.24"},{"per_position":"125500.251"},{"per_position":"NaN"},
         ]
         for override in invalid:
@@ -196,6 +196,13 @@ class LiveTerminalTests(unittest.TestCase):
         self.supervisor.armed=True
         locked=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(locked.status_code,400)
+
+        legacy = self.supervisor.ledger.read_settings()
+        self.supervisor.ledger.write_settings({**legacy, "exit_time": "15:15:00"}, TODAY)
+        migrated = LiveSupervisor(self.bridge.state.engine, ledger_path=self.db_url,
+                                  clock=self.clock, kotak_factory=lambda: self.broker)
+        self.addCleanup(migrated.ledger.close)
+        self.assertEqual(migrated.snapshot()["strategy"]["exit_time"], "15:00:00")
 
     def test_cross_origin_live_action_rejected(self):
         self.login()
@@ -593,7 +600,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
         instruments={s:KotakInstrument(s,s+"-EQ",str(i+100)) for i,s in enumerate(symbols)}
         ranges={s:(Decimal("100"),Decimal("95")) for s in symbols}
         custom_policy=LivePolicy(time(10),time(15,15),10,10,20,
-            Decimal("50000"),Decimal("1000000"),"start")
+            Decimal("50000"),Decimal("1000000"),"start",entry_quantity_cap=1)
         runtime=LiveRuntime(session_date=date(2026,11,4),signals=signals,dhan_ids=ids,
             kotak_instruments=instruments,opening_ranges=ranges,policy=custom_policy,
             ledger=self.ledger,broker=FakeBroker(),enabled=True,clock=lambda:TODAY)
@@ -624,7 +631,8 @@ class KotakOrderSafetyTests(unittest.TestCase):
             self.assertEqual(len(entries),20)
             self.assertTrue(all(x["state"]=="FILLED" for x in entries))
             entries_in_parallel["enabled"]=False
-            exit_at=TODAY.replace(hour=15,minute=15)
+            exit_at=TODAY.replace(hour=15,minute=0)
+            self.assertEqual(runtime.exit_due(exit_at - timedelta(microseconds=1)), [])
             exits=runtime.exit_due(exit_at)
             self.assertEqual(len(exits),20)
             restarted=LiveRuntime(session_date=date(2026,11,4),signals=signals,dhan_ids=ids,
@@ -635,7 +643,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
             self.assertEqual(restarted.exit_due(exit_at),[])
             rows=restarted.ledger.snapshot(TODAY.date())
             self.assertEqual(sum(x["phase"]=="EXIT" for x in rows),20)
-            self.assertTrue(all(x["state"]=="FILLED" for x in rows))
+            self.assertTrue(all(x["state"]=="FILLED" and x["quantity"]==1 for x in rows))
 
     def test_thirty_simultaneous_breakouts_with_duplicates_reserve_at_most_ten_entries(self):
         """Sixty simultaneous ticks across 30 stocks cannot exceed the 5+5 cap."""
