@@ -11,6 +11,9 @@ from pathlib import Path
 from live_desk.dhan_data import IST
 
 
+LATEST_ENTRY_CUTOFF = time(9, 30)
+
+
 @dataclass(frozen=True)
 class LivePolicy:
     entry_cutoff: time
@@ -21,6 +24,11 @@ class LivePolicy:
     per_position: Decimal
     gross_cap: Decimal
     timestamp_mode: str | None
+
+    def __post_init__(self):
+        # Older persisted settings must not widen the entry window.
+        if self.entry_cutoff > LATEST_ENTRY_CUTOFF:
+            object.__setattr__(self, "entry_cutoff", LATEST_ENTRY_CUTOFF)
 
 
 def load_policy(path: Path) -> LivePolicy:
@@ -46,8 +54,8 @@ def load_policy(path: Path) -> LivePolicy:
 
 def candidate_entry(*, side: str, previous_price: Decimal, price: Decimal,
                     orb_high: Decimal, orb_low: Decimal, tick_at: datetime,
-                    policy: LivePolicy, open_long: int, open_short: int,
-                    reserved_gross: Decimal, open_positions: int = 0) -> int | None:
+                    policy: LivePolicy, open_long: int = 0, open_short: int = 0,
+                    reserved_gross: Decimal = Decimal(0), open_positions: int = 0) -> int | None:
     if tick_at.tzinfo is None or tick_at.utcoffset() is None:
         raise ValueError("Tick time must include timezone")
     local = tick_at.astimezone(IST)

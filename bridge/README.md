@@ -9,7 +9,7 @@ The live dashboard already embeds this authenticated API receiver. ChatGPT sends
 - `GET /api/v1/signals/status`: current-session delivery status, Bearer token required.
 - `GET /api/v1/health`: liveness only; no signal data.
 
-The receiver validates the signal schema, report date, source timestamps, duplicate JSON keys, universe, and duplicate/conflicting submissions. It stores each accepted input batch and maintains one additive session report. New symbols can be delivered during the NSE session until 15:00 IST; a symbol cannot be repeated with a different direction, and the session report is capped at five LONG and five SHORT symbols. Identical retries return `DUPLICATE`; conflicting batches return HTTP 409.
+The receiver validates the signal schema, report date, source timestamps, duplicate JSON keys, universe, and duplicate/conflicting submissions. It stores each accepted input batch and maintains one additive daily report. Reports can be delivered at any time; outside the market entry window, the terminal maps symbols but does not start ORB monitoring. A symbol cannot be repeated with a different direction, and the daily report is capped at five LONG and five SHORT symbols. Identical retries return `DUPLICATE`; conflicting batches return HTTP 409.
 
 ## Configure the direct connection
 
@@ -22,7 +22,7 @@ The repository's `bridge.send` is a command-line sender for an authorized proces
 
 ## Codex scheduled task
 
-For a local Codex scheduler, use [the Codex task prompt](CODEX_TASK_PROMPT.md) with the existing project schedule. `node bridge/send_codex.js <report.json>` sends each generated v1.0 batch to `SIGNAL_BRIDGE_URL` using `SIGNAL_BRIDGE_TOKEN` from the ignored project `.env`; no OpenAI API key is required. The dashboard bridge validates the report and adds newly qualified symbols to today's session list. The scheduler must report delivery only after an `ACCEPTED` or `DUPLICATE` acknowledgment.
+For a local Codex scheduler, use [the Codex task prompt](CODEX_TASK_PROMPT.md) with the existing project schedule. `node bridge/send_codex.js <report.json>` sends each generated v1.0 batch to `SIGNAL_BRIDGE_URL` using `SIGNAL_BRIDGE_TOKEN` from the ignored project `.env`; no OpenAI API key is required. The sender retries transient network errors and HTTP 408/425/429/5xx responses up to three times with the same idempotency key, and reports a bounded error if delivery still fails. Permanent client errors fail immediately. The dashboard bridge validates the report and adds newly qualified symbols to today's session list. The scheduler must report delivery only after an `ACCEPTED` or `DUPLICATE` acknowledgment.
 
 ## Unattended Astra research job
 

@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -40,7 +41,7 @@ def canonical_bytes(payload: dict) -> bytes:
 
 def deliver(payload: dict, *, url: str, token: str, timeout: float = 12.0,
             allow_http_localhost: bool = False, now: datetime | None = None,
-            opener=urlopen) -> dict:
+            opener=urlopen, attempts: int = 3, sleep_fn=time.sleep) -> dict:
     """Reject malformed/stale input and unsafe URLs BEFORE attempting network I/O."""
     now = (now or datetime.now(IST)).astimezone(IST)
     validate(payload, expected_date=now.date().isoformat())
@@ -48,12 +49,10 @@ def deliver(payload: dict, *, url: str, token: str, timeout: float = 12.0,
         raise DeliveryError("Bootstrap reports are not valid delivery payloads")
     if payload.get("sample") is True:
         raise DeliveryError("Sample reports are not allowed")
-    if now.hour < 9:
-        raise DeliveryError("Reports cannot be delivered before 09:00 IST")
-    if payload["status"] == "READY" and now.time() >= datetime.strptime("15:00", "%H:%M").time():
-        raise DeliveryError("READY delivery deadline passed (15:00 IST)")
     if not isinstance(token, str) or len(token) < 32:
         raise DeliveryError("A 32+ character SIGNAL_BRIDGE_TOKEN is required")
+    if not isinstance(attempts, int) or attempts < 1:
+        raise DeliveryError("Delivery attempts must be a positive integer")
 
     uri = urlparse(url)
     insecure_local = (uri.scheme == "http" and uri.hostname in ("localhost", "127.0.0.1", "::1")
@@ -70,24 +69,39 @@ def deliver(payload: dict, *, url: str, token: str, timeout: float = 12.0,
         raise DeliveryError("Report exceeds the maximum allowed size")
     digest = hashlib.sha256(raw).hexdigest()
     idempotency_key = f"research-{payload['session_date']}-{digest[:24]}"
-    request = Request(
-        url,
-        data=raw,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": "Bearer " + token,
-            "Idempotency-Key": idempotency_key,
-        },
-    )
-    try:
-        with opener(request, timeout=timeout) as response:
-            result = json.loads(response.read(MAX_BYTES + 1))
-    except HTTPError as exc:
-        raise DeliveryError(f"Bridge returned HTTP {exc.code}") from exc
-    except (URLError, OSError, ValueError, UnicodeDecodeError) as exc:
-        raise DeliveryError(f"Bridge delivery or response failed: {type(exc).__name__}") from exc
+    result = None
+    for attempt in range(1, attempts + 1):
+        request = Request(
+            url,
+            data=raw,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": "Bearer " + token,
+                "Idempotency-Key": idempotency_key,
+            },
+        )
+        try:
+            with opener(request, timeout=timeout) as response:
+                result = json.loads(response.read(MAX_BYTES + 1))
+            break
+        except HTTPError as exc:
+            transient = exc.code in (408, 425, 429) or 500 <= exc.code < 600
+            if not transient or attempt == attempts:
+                raise DeliveryError(f"Bridge returned HTTP {exc.code} after {attempt} attempt(s)") from exc
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            try:
+                delay = min(max(float(retry_after), 0), 5) if retry_after is not None else (0.75 * 2 ** (attempt - 1))
+            except ValueError:
+                delay = 0.75 * 2 ** (attempt - 1)
+            sleep_fn(delay)
+        except (URLError, OSError, ValueError, UnicodeDecodeError) as exc:
+            if attempt == attempts:
+                reason = getattr(getattr(exc, "reason", None), "errno", None)
+                detail = f"{type(exc).__name__} ({reason})" if reason else type(exc).__name__
+                raise DeliveryError(f"Bridge delivery or response failed after {attempt} attempts: {detail}") from exc
+            sleep_fn(0.75 * 2 ** (attempt - 1))
 
     if not isinstance(result, dict) or result.get("status") not in ("ACCEPTED", "DUPLICATE"):
         raise DeliveryError("Bridge did not acknowledge acceptance or a verified duplicate")

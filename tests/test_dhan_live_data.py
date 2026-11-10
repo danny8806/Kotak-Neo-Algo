@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -52,6 +53,26 @@ class DhanIndexDataTests(unittest.TestCase):
         self.assertEqual(method,"POST")
         self.assertEqual(url,API_ROOT+"/marketfeed/ohlc")
         self.assertEqual(kwargs["json"],{"IDX_I":[21]})
+
+    def test_history_allows_five_parallel_reads_and_paces_sixth(self):
+        arrivals=[]
+        lock=threading.Lock()
+        first_wave=threading.Barrier(5)
+        class Session:
+            def request(self,_method,_url,**kwargs):
+                with lock:
+                    arrivals.append(time.monotonic())
+                    ordinal=len(arrivals)
+                if ordinal<=5:
+                    first_wave.wait(timeout=2)
+                return FakeResponse({field:[1] for field in ("timestamp","open","high","low","close")})
+        client=DhanDataClient("test","pin","test",session=Session())
+        client.token="test-token"
+        now=datetime(2026,11,5,9,15,tzinfo=IST)
+        with ThreadPoolExecutor(6) as pool:
+            results=list(pool.map(lambda n:client.get_intraday(str(n),now,now+timedelta(minutes=2)),range(6)))
+        self.assertEqual(len(results),6)
+        self.assertGreaterEqual(arrivals[-1]-arrivals[0],1.0)
 
     def test_ohlc_rejects_unconfigured_exchange_segments(self):
         client=DhanDataClient("client","pin","JBSWY3DPEHPK3PXP",session=FakeSession())

@@ -8,7 +8,7 @@ import os
 import json
 import hashlib
 import unittest
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -81,7 +81,7 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.text)
 
     def test_login_required_for_broker_books(self):
-        for path in ("/","/api/state","/api/live/orders","/api/live/positions","/api/live/fills"):
+        for path in ("/","/api/state","/api/live/orders","/api/live/positions","/api/live/fills","/api/live/journal"):
             with self.subTest(path=path):
                 response=self.client.get(path,follow_redirects=False)
                 self.assertIn(response.status_code,(303,401))
@@ -100,6 +100,28 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertFalse(state["orders_permitted_by_server"])
         self.assertEqual(state["signal_status"],"UNAVAILABLE")
 
+    def test_dashboard_subpath_supports_https_reverse_proxy(self):
+        with patch.dict(os.environ,{"DASHBOARD_BASE_PATH":"/kotak-live"}):
+            app=create_live_app(database_url=self.db_url,bearer_token=TOKEN,
+                dashboard_password=PASSWORD,session_secret=SESSION,
+                supervisor=self.supervisor,clock=self.clock,start_supervisor=False)
+        self.addCleanup(app.state.engine.dispose)
+        client=TestClient(app)
+        redirect=client.get("/",follow_redirects=False)
+        self.assertEqual(redirect.headers["location"],"/kotak-live/login")
+        login_page=client.get("/login")
+        self.assertEqual(login_page.status_code,200)
+        self.assertIn('<base href="/kotak-live/"/>',login_page.text)
+        self.assertRegex(login_page.text, r"route\((['\"])/api/auth/login\1\)")
+        auth=client.post("/api/auth/login",json={"password":PASSWORD})
+        self.assertEqual(auth.status_code,200)
+        cookie=auth.cookies.get("kotak_live_session")
+        index=client.get("/",cookies={"kotak_live_session":cookie})
+        self.assertEqual(index.status_code,200)
+        self.assertIn('<base href="/kotak-live/"/>',index.text)
+        self.assertIn('src="static/app.js"',index.text)
+        self.assertEqual(client.get("/api/state",cookies={"kotak_live_session":cookie}).status_code,200)
+
     def test_kotak_books_available_without_news_but_orders_blocked(self):
         self.supervisor.cycle()
         self.login()
@@ -110,6 +132,16 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertIsNone(rows[0]["gross_mark_to_market"])
         self.assertFalse(self.client.get("/api/state").json()["armed"])
         self.assertEqual(self.broker.order_calls,0)
+
+    def test_trade_journal_is_authenticated_and_uses_durable_records(self):
+        self.login()
+        response=self.client.get("/api/live/journal")
+        self.assertEqual(response.status_code,200,response.text)
+        body=response.json()
+        self.assertTrue(body["real_only"])
+        self.assertEqual(body["summary"]["trade_count"],0)
+        self.assertIsNone(body["summary"]["net_after_fees"])
+        self.assertEqual(body["summary"]["wins"],0)
 
     def test_live_order_arming_rejected_by_default(self):
         self.supervisor.cycle()
@@ -122,16 +154,45 @@ class LiveTerminalTests(unittest.TestCase):
     def test_live_settings_are_authenticated_validated_persistent_and_disarmed_only(self):
         self.login()
         headers={"Origin":"http://testserver"}
-        payload={"per_position":"50000","max_positions":"10","gross_cap":"500000",
-                 "max_long":"5","max_short":"5","entry_cutoff":"10:00","exit_time":"15:15"}
+        payload={"per_position":"125500.25","max_positions":"3","gross_cap":"300000.25",
+                 "max_long":"2","max_short":"1","entry_cutoff":"09:27","exit_time":"15:10"}
         response=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(response.status_code,200,response.text)
-        self.assertEqual(response.json()["strategy"]["max_positions"],10)
-        self.assertEqual(self.supervisor.ledger.read_settings()["per_position"],"50000")
-        over_cap=self.client.post("/api/live/settings",headers=headers,json={**payload,"max_long":"6"})
-        self.assertEqual(over_cap.status_code,400)
-        bad=self.client.post("/api/live/settings",headers=headers,json={**payload,"exit_time":"09:50"})
-        self.assertEqual(bad.status_code,400)
+        expected={"allocation_per_position":"125500.25","gross_cap":"300000.25",
+                  "max_positions":3,"max_long":2,"max_short":1,
+                  "entry_cutoff":"09:27:00","exit_time":"15:10:00"}
+        self.assertEqual(response.json()["strategy"],expected)
+        restarted=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=self.clock,
+                                 kotak_factory=lambda:self.broker)
+        self.addCleanup(restarted.ledger.close)
+        saved=restarted.snapshot()["strategy"]
+        self.assertEqual({name:saved[name] for name in expected},expected)
+        policy=restarted.policy
+        price=Decimal("320.50")
+        quantity=candidate_entry(side="LONG",previous_price=Decimal("320"),price=price,
+                                 orb_high=Decimal("320"),orb_low=Decimal("300"),
+                                 tick_at=TODAY,policy=policy)
+        self.assertEqual(quantity,391)
+        for symbol,side,side_cap in [("TESTA","BUY",policy.max_long),("TESTB","BUY",policy.max_long),
+                                     ("TESTC","SELL",policy.max_short)]:
+            reservation=restarted.ledger.reserve_entry(session_date=TODAY.date(),symbol=symbol,
+                side=side,quantity=quantity,reference_price=price,at=TODAY,
+                max_per_side=side_cap,gross_cap=policy.gross_cap,max_total=policy.max_positions)
+            if symbol=="TESTC":
+                self.assertIsNone(reservation)
+            else:
+                self.assertIsNotNone(reservation)
+        self.assertEqual(self.broker.order_calls,0)
+        invalid=[
+            {"max_long":"6"},{"max_positions":"4"},{"max_short":1.5},{"max_long":True},
+            {"entry_cutoff":"09:31"},{"exit_time":"09:25"},{"exit_time":"15:15+05:30"},
+            {"gross_cap":"125500.24"},{"per_position":"125500.251"},{"per_position":"NaN"},
+        ]
+        for override in invalid:
+            with self.subTest(override=override):
+                bad=self.client.post("/api/live/settings",headers=headers,json={**payload,**override})
+                self.assertEqual(bad.status_code,400,bad.text)
+        self.assertEqual(self.supervisor.ledger.read_settings()["entry_cutoff"],"09:27:00")
         self.supervisor.armed=True
         locked=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(locked.status_code,400)
@@ -153,6 +214,16 @@ class LiveTerminalTests(unittest.TestCase):
         self.login()
         with self.client.websocket_connect("/ws", headers={"Origin":"http://testserver"}) as ws:
             self.assertEqual(ws.receive_json()["mode"], "LIVE_KOTAK_NEO_ONLY")
+
+    def test_midnight_expires_an_already_connected_dashboard_websocket(self):
+        self.login()
+        with self.client.websocket_connect("/ws",headers={"Origin":"http://testserver"}) as ws:
+            self.assertEqual(ws.receive_json()["session_date"],TODAY.date().isoformat())
+            self.supervisor.clock=lambda:TODAY+timedelta(days=1)
+            with self.assertRaises(WebSocketDisconnect) as caught:
+                ws.receive_json()
+            self.assertEqual(caught.exception.code,4401)
+        self.assertEqual(self.client.get("/api/state").status_code,401)
 
     def test_missing_news_never_triggers_kotak_order(self):
         self.supervisor.cycle()
@@ -203,6 +274,92 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertFalse(desk.armed)
         self.assertEqual(self.broker.order_calls,0)
 
+    def test_after_cutoff_weekday_signal_maps_without_starting_orb_or_feed(self):
+        from live_desk.dhan_instruments import DhanMasterSnapshot
+
+        now=datetime(2026,11,6,15,31,tzinfo=IST)
+        stamp=now.isoformat()
+        report={"schema_version":"1.0","status":"READY","market":"NSE",
+            "timezone":"Asia/Kolkata","session_date":"2026-11-06",
+            "news_cutoff_at":stamp,"generated_at":stamp,"execution_enabled":False,
+            "signals":[{"symbol":"TESTA","side":"LONG","rank":1,
+                "reason":"Verified company event supports positive directional bias.",
+                "news_summary":"A verified company filing provides a positive catalyst.",
+                "first_available_at":"2026-11-06T14:00:00+05:30",
+                "sources":[{"url":"https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+                    "title":"Issuer filing","published_at":"2026-11-06T14:00:00+05:30"}]}]}
+        raw=json.dumps(report,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+        with self.bridge.state.engine.begin() as db:
+            db.execute(reports.insert().values(session_date="2026-11-06",
+                idempotency_key="after-cutoff-dhan-map-test",
+                sha256=hashlib.sha256(raw.encode()).hexdigest(),status="READY",
+                received_at=now,original_json=raw))
+
+        class Dhan:
+            token="test-authenticated-token"
+
+        class Auth:
+            def snapshot(self):return {"state":"AUTHENTICATED"}
+            def stop(self):pass
+
+        master=lambda symbols,now:DhanMasterSnapshot(now.date().isoformat(),now,"master-sha",
+            {symbol:"12345" for symbol in symbols})
+        desk=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,
+            clock=lambda:now,kotak_factory=lambda:None,master_fetch=master)
+        self.addCleanup(desk.stop)
+        desk.dhan=Dhan();desk.dhan_auth=Auth()
+        desk.cycle()
+
+        self.assertEqual(desk.status,"SIGNALS_MAPPED_OFF_SESSION")
+        self.assertEqual(desk.dhan_ids,{"TESTA":"12345"})
+        self.assertIsNone(desk.runtime)
+        self.assertIsNone(desk.ticker)
+        self.assertFalse(desk.armed)
+        self.assertEqual(self.broker.order_calls,0)
+
+    def test_exact_cutoff_preserves_preopen_watchlist_on_restart(self):
+        from test_failure_cases import ready_fixture
+
+        now=[TODAY.replace(hour=9,minute=14,second=59)]
+        self.supervisor.clock=lambda:now[0]
+        self.supervisor.allowed_symbols={"TESTA","TESTB","TESTC"}
+        app=create_app(database_url=self.db_url,bearer_token=TOKEN,
+                       now_provider=lambda:now[0],allowed_symbols=self.supervisor.allowed_symbols)
+        self.addCleanup(app.state.engine.dispose)
+        with TestClient(app) as client:
+            def ingest(symbol,side):
+                report=ready_fixture(now[0].date().isoformat())
+                published_at=(now[0].date()-timedelta(days=1)).isoformat()+"T16:15:00+05:30"
+                report["signals"][0].update(symbol=symbol,side=side,first_available_at=published_at)
+                report["signals"][0]["sources"][0]["published_at"]=published_at
+                response=client.post("/api/v1/signals/incoming",json=report,headers={
+                    "Authorization":"Bearer "+TOKEN,"Idempotency-Key":"fixture-"+symbol})
+                self.assertEqual(response.status_code,200,response.text)
+                return response.json()
+
+            first=ingest("TESTA","LONG")
+            now[0]+=timedelta(seconds=1)
+            self.assertEqual(ingest("TESTB","SHORT")["status"],"ACCEPTED")
+            now[0]+=timedelta(minutes=1)
+            # Load from PostgreSQL for the first time after both reports landed.
+            self.assertTrue(self.supervisor._load_report())
+            state=self.supervisor.snapshot()
+            self.assertTrue(state["watchlist_locked"])
+            self.assertEqual(state["report_hash"],first["sha256"])
+            self.assertEqual([(s["symbol"],s["side"],s["entry_eligible"]) for s in state["signals"]],
+                             [("TESTA","LONG",True),("TESTB","SHORT",False)])
+            self.assertIsNone(self.supervisor.runtime)
+
+            now[0]+=timedelta(days=1)
+            self.supervisor._new_day(now[0].date().isoformat())
+            self.assertEqual(ingest("TESTC","LONG")["status"],"ACCEPTED")
+            self.assertTrue(self.supervisor._load_report())
+            self.supervisor._build_runtime()
+            state=self.supervisor.snapshot()
+            self.assertEqual(state["supervisor_status"],"LATE_RESEARCH_ONLY")
+            self.assertIn("CURRENT_SESSION_SIGNALS",state["readiness_blockers"])
+            self.assertIsNone(self.supervisor.ticker)
+
     def test_missing_kotak_configuration_is_quiet_and_disarmed(self):
         keys=("KOTAK_NEO_CONSUMER_KEY","KOTAK_NEO_MOBILE_NUMBER","KOTAK_NEO_UCC",
               "KOTAK_NEO_MPIN","KOTAK_NEO_TOTP_SECRET")
@@ -237,7 +394,7 @@ class LiveTerminalTests(unittest.TestCase):
         with self.bridge.state.engine.begin() as db:
             db.execute(reports.insert().values(session_date="2026-11-04",
                 idempotency_key="dhan-orb-monitor-test",sha256=hashlib.sha256(raw.encode()).hexdigest(),
-                status="READY",received_at=TODAY,original_json=raw))
+                status="READY",received_at=TODAY.replace(minute=14),original_json=raw))
 
         class Dhan:
             token="test-authenticated-token"
@@ -310,9 +467,13 @@ class LiveTerminalTests(unittest.TestCase):
         self.supervisor.dhan.get_ohlc=Mock(side_effect=[
             RuntimeError("index quote unavailable"),
             {"TESTA":{"open":100,"high":102,"low":99,"close":101,"ltp":101}}])
+        self.supervisor.on_tick({"symbol":"TESTA","ltp":103,"timestamp":TODAY})
         self.supervisor._refresh_vix_context(TODAY)
         self.supervisor.poll_ohlc()
-        self.assertEqual(self.supervisor.quote_data["TESTA"]["ltp"],101)
+        quote=self.supervisor.quote_data["TESTA"]
+        self.assertEqual(quote["open"],100)
+        self.assertEqual(quote["ltp"],103)
+        self.assertEqual(quote["tick_at"],TODAY.isoformat())
         self.assertIsNotNone(self.supervisor.last_ohlc_at)
 
     def test_live_policy_has_no_implicit_daily_loss_limit(self):
@@ -356,6 +517,7 @@ class LiveTerminalTests(unittest.TestCase):
             "filled_quantity":3,"average_fill_price":"100","trading_symbol":"TESTA-EQ"},TODAY)
         self.supervisor.allowed=True
         self.supervisor.session_authorized=False
+        self.supervisor.broker=self.broker
         self.supervisor.runtime=None
         self.supervisor.last_book_at=TODAY.replace(hour=15,minute=19,second=55)
         self.supervisor.broker_positions=parse_positions(self.broker,{})
@@ -475,11 +637,11 @@ class KotakOrderSafetyTests(unittest.TestCase):
             self.assertEqual(sum(x["phase"]=="EXIT" for x in rows),20)
             self.assertTrue(all(x["state"]=="FILLED" for x in rows))
 
-    def test_twenty_concurrent_ticks_reserve_at_most_ten_unique_signal_entries(self):
-        """Duplicate simultaneous crossings cannot exceed the configured 5+5 cap."""
+    def test_thirty_simultaneous_breakouts_with_duplicates_reserve_at_most_ten_entries(self):
+        """Sixty simultaneous ticks across 30 stocks cannot exceed the 5+5 cap."""
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
-        symbols=[f"LONG{i}" for i in range(1,6)]+[f"SHORT{i}" for i in range(1,6)]
+        symbols=[f"LONG{i}" for i in range(1,16)]+[f"SHORT{i}" for i in range(1,16)]
         signals=[{"symbol":s,"side":"LONG" if s.startswith("LONG") else "SHORT"} for s in symbols]
         ids={s:str(i+1) for i,s in enumerate(symbols)}
         instruments={s:KotakInstrument(s,s+"-EQ",str(i+100)) for i,s in enumerate(symbols)}
@@ -500,7 +662,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
         for symbol in symbols:
             edge=Decimal("100") if symbol.startswith("LONG") else Decimal("95")
             self.assertIsNone(runtime.on_tick({"symbol":symbol,"ltp":str(edge),"timestamp":TODAY}))
-        gate=Barrier(20)
+        gate=Barrier(60)
         ticks=[]
         for symbol in symbols:
             cross="100.01" if symbol.startswith("LONG") else "94.99"
@@ -510,17 +672,51 @@ class KotakOrderSafetyTests(unittest.TestCase):
             return runtime.on_tick(tick)
         with patch("live_desk.runtime.place_kotak_order",side_effect=submit), \
              patch("live_desk.runtime.reconcile_kotak_tag",side_effect=reconcile), \
-             ThreadPoolExecutor(max_workers=20) as pool:
+             ThreadPoolExecutor(max_workers=60) as pool:
             results=list(pool.map(deliver,ticks))
             self.assertTrue(runtime.wait_for_submissions(timeout=10))
         rows=[r for r in self.ledger.snapshot(TODAY.date()) if r["phase"]=="ENTRY"]
-        self.assertEqual(sum(result is not None for result in results),10)
+        self.assertGreaterEqual(sum(result is not None for result in results),10)
         self.assertEqual(len(rows),10)
         self.assertEqual(len({row["symbol"] for row in rows}),10)
         self.assertEqual(sum(row["side"]=="BUY" for row in rows),5)
         self.assertEqual(sum(row["side"]=="SELL" for row in rows),5)
         self.assertEqual(len(submit_tags),10)
+        self.assertEqual(set(submit_tags), {(row["symbol"], row["tag"]) for row in rows})
         self.assertTrue(all(row["state"]=="FILLED" for row in rows))
+
+    def test_independent_ledger_workers_serialize_position_caps_without_deadlock(self):
+        """Separate app/worker engines must share PostgreSQL cap reservations."""
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        import time as wall_clock
+
+        second_worker = LiveLedger(self.db_url)
+        self.addCleanup(second_worker.close)
+        ledgers = (self.ledger, second_worker)
+        symbols = [f"PARLONG{i}" for i in range(10)] + [f"PARSHORT{i}" for i in range(10)]
+        gate = Barrier(len(symbols))
+
+        def reserve(index, symbol):
+            side = "BUY" if symbol.startswith("PARLONG") else "SELL"
+            gate.wait(timeout=8)
+            return ledgers[index % 2].reserve_entry(
+                session_date=TODAY.date(), symbol=symbol, side=side, quantity=1,
+                reference_price=Decimal("100"), at=TODAY, max_per_side=5,
+                gross_cap=Decimal("10000"), max_total=10)
+
+        started = wall_clock.monotonic()
+        with ThreadPoolExecutor(max_workers=len(symbols)) as pool:
+            results = list(pool.map(lambda item: reserve(*item), enumerate(symbols)))
+        elapsed = wall_clock.monotonic() - started
+        accepted = [row for row in results if row is not None]
+        self.assertLess(elapsed, 10, "Concurrent reservations stalled; possible lock contention/deadlock")
+        self.assertEqual(len(accepted), 10)
+        self.assertEqual(sum(row["side"] == "BUY" for row in accepted), 5)
+        self.assertEqual(sum(row["side"] == "SELL" for row in accepted), 5)
+        self.assertEqual(len({row["symbol"] for row in accepted}), 10)
+        persisted = [row for row in self.ledger.snapshot(TODAY.date()) if row["phase"] == "ENTRY"]
+        self.assertEqual(len(persisted), 10)
 
     def test_durable_intent_rejects_duplicate_entry(self):
         args=dict(session_date=TODAY.date(),symbol="TESTA",side="BUY",

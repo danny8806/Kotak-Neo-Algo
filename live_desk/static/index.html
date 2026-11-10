@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="color-scheme" content="light"/><title>Kotak Neo · Live desk</title><link rel="stylesheet" href="/static/styles.css"/></head>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="color-scheme" content="light"/><base href="__DASHBOARD_BASE_PATH__/"/><title>Kotak Neo · Live desk</title><link rel="stylesheet" href="static/styles.css"/></head>
 <body>
 <a class="skip-link" href="#workspace">Skip to workspace</a>
 <div class="app-shell">
@@ -14,9 +14,10 @@
 <a href="#positions" data-view="positions"><span class="nav-icon">▥</span>Positions &amp; P&amp;L</a>
 <a href="#orders" data-view="orders"><span class="nav-icon">↗</span>Order book</a>
 <a href="#fills" data-view="fills"><span class="nav-icon">⇄</span>Executed fills</a>
+<a href="#journal" data-view="journal"><span class="nav-icon">▤</span>Trade journal</a>
 <div class="nav-label">OPERATIONS</div>
 <a href="#connections" data-view="connections"><span class="nav-icon">◎</span>Connections &amp; checks</a>
-<a href="#settings" data-view="settings"><span class="nav-icon">⚙</span>Configuration<span id="unsavedDot" class="unsaved-dot" hidden></span></a>
+<a href="#settings" data-view="settings"><span class="nav-icon">⚙</span>Settings<span id="unsavedDot" class="unsaved-dot" hidden></span></a>
 </nav>
 <div class="sidebar-bottom"><span class="environment-dot"></span><div>Production environment<small>NSE cash · Kotak execution</small></div><span class="environment-tag">LIVE</span></div>
 </aside>
@@ -24,20 +25,40 @@
 <div class="main-shell">
 <header class="topbar"><div class="breadcrumb"><button class="icon-button mobile-menu" id="menuToggle" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">☰</button><span class="desk-label">Trading workspace</span><span class="breadcrumb-divider">/</span><strong id="viewTitle">Overview</strong></div><div class="topbar-actions"><span id="liveClock" class="clock">— IST</span><span class="pill" id="mode">ORDERS DISARMED</span><button class="quiet-button" id="logout">Sign out <span aria-hidden="true">↗</span></button></div></header>
 <main id="workspace" tabindex="-1">
-<div class="page-heading"><div><p class="eyebrow" id="viewEyebrow">YOUR SESSION AT A GLANCE</p><h1 id="pageTitle">Session overview</h1><p id="pageDescription">A clear view of your account, execution gates, and live connections.</p></div><div class="page-heading-actions"><span class="pill" id="connection">CONNECTING</span><button class="secondary small" id="refreshState" title="Refresh live account state">↻ <span>Refresh</span></button></div></div>
-<div class="notice" id="notice" role="status">Connecting to the live desk. Order controls remain locked.</div>
+<div class="page-heading"><div><p class="eyebrow" id="viewEyebrow">YOUR SESSION AT A GLANCE</p><h1 id="pageTitle">Session overview</h1><p id="pageDescription">Track live P&amp;L, the opening workflow, and order readiness.</p></div><div class="page-heading-actions"><span class="pill" id="connection">CONNECTING</span><button class="secondary small" id="refreshState" title="Refresh live account state">↻ <span>Refresh</span></button></div></div>
+<div class="notice session-status" id="notice" data-tone="neutral">
+  <div class="session-status-copy" role="status">
+    <strong id="noticeTitle">Connecting to the live desk</strong>
+    <p id="noticeDetail">Waiting for account and market status.</p>
+  </div>
+  <a id="noticeAction" class="session-status-link" href="#connections">View checks <span aria-hidden="true">→</span></a>
+</div>
 <div class="view-container">
 <section class="view" id="view-overview" aria-label="Overview">
 <div class="overview-metrics">
 <article class="metric hero-metric"><div class="metric-top"><span>Session gross P&amp;L</span><span class="metric-icon">↗</span></div><div class="value" id="mtm">—</div><p>Realized + unrealized · before fees</p><div class="metric-bottom"><span class="tiny-dot"></span>Broker books &amp; fresh exchange prices</div></article>
 <article class="metric"><div class="metric-top"><span>Available broker funds</span><span class="metric-icon">▤</span></div><div class="value" id="funds">—</div><p>Kotak-reported account balance</p><a href="#settings" class="metric-link">Review allocation <span>↗</span></a></article>
-<article class="metric"><div class="metric-top"><span>Open positions</span><span class="metric-icon">▥</span></div><div class="value" id="posCount">—</div><p>Confirmed NSE cash positions</p><a href="#positions" class="metric-link">View positions <span>↗</span></a></article>
+<article class="metric"><div class="metric-top"><span>Open positions</span><span class="metric-icon">▥</span></div><div class="value" id="posCount">—</div><p id="positionOutcome">Confirmed NSE cash positions</p><a href="#positions" class="metric-link">View positions <span>↗</span></a></article>
 <article class="metric"><div class="metric-top"><span>Entry readiness</span><span class="metric-icon">◎</span></div><div class="value status-value" id="risk">CHECKING</div><p id="riskReason">Waiting for live checks</p><a href="#connections" class="metric-link">Inspect prerequisites <span>↗</span></a></article>
 </div>
 <div class="overview-body">
-<article class="panel pnl-panel"><div class="panel-heading"><div><h2>Profit &amp; loss</h2><p>A transparent breakdown of the session</p></div><span class="subtle-tag">GROSS</span></div><div class="pnl-total-label">SESSION BREAKDOWN</div><div class="pnl-line"><span><i class="legend-dot teal"></i>Realized P&amp;L<small>Matched broker buys and sells</small></span><strong id="realizedPnl">—</strong></div><div class="pnl-line"><span><i class="legend-dot blue"></i>Unrealized P&amp;L<small>Marked against fresh exchange ticks</small></span><strong id="unrealizedPnl">—</strong></div><div class="pnl-line net-line"><span>Net after fees<small>Awaiting authoritative broker charges</small></span><strong id="netPnl">—</strong></div><a href="#positions" class="panel-link">Open positions &amp; valuation details <span>→</span></a></article>
-<article class="panel readiness-panel"><div class="panel-heading"><div><h2>Execution prerequisites</h2><p id="gateSummary">Verifying the session</p></div><span class="pill" id="gate">DISARMED</span></div><div id="overviewGates" class="gate-list"></div><a href="#connections" class="panel-link">View every connection and check <span>→</span></a></article>
-<article class="panel session-panel"><div class="panel-heading"><div><h2>Session context</h2><p>Exchange time · Asia/Kolkata</p></div><span class="subtle-tag" id="tradingWindow">—</span></div><div class="context-grid"><div><span>Session date</span><strong id="session">—</strong></div><div><span>Research candidates</span><strong id="count">—</strong></div><div><span>India VIX</span><strong id="vix">—</strong></div><div><span>Research state</span><span class="pill" id="source">UNAVAILABLE</span></div></div><p class="context-note" id="vixAsOf">Dhan index context; not an entry trigger.</p><div class="session-times"><span><i></i><b>08:00</b>Login refresh</span><span><i></i><b>09:15</b>Opening range</span><span><i></i><b id="contextExit">15:15</b>Square-off</span></div></article>
+<article class="panel pnl-panel"><div class="panel-heading"><div><h2>Profit &amp; loss</h2><p>A transparent breakdown of the session</p></div><span class="subtle-tag">GROSS</span></div><div class="pnl-line"><span><i class="legend-dot teal"></i>Realized P&amp;L<small>Matched broker buys and sells</small></span><strong id="realizedPnl">—</strong></div><div class="pnl-line"><span><i class="legend-dot blue"></i>Unrealized P&amp;L<small>Marked against fresh exchange ticks</small></span><strong id="unrealizedPnl">—</strong></div><div class="pnl-line net-line"><span>Net after fees<small>Awaiting authoritative broker charges</small></span><strong id="netPnl">—</strong></div><a href="#positions" class="panel-link">Open positions &amp; valuation details <span>→</span></a></article>
+<article class="panel readiness-panel"><div class="panel-heading"><div><h2>Execution prerequisites</h2><p id="gateSummary">Verifying the session</p></div><span class="pill" id="gate">DISARMED</span></div><progress id="gateProgress" class="gate-progress" aria-label="Verified execution checks"></progress><div id="overviewGates" class="gate-list"></div><a href="#connections" class="panel-link">View every connection and check <span>→</span></a></article>
+<article class="panel session-panel">
+  <div class="panel-heading"><div><h2>Opening workflow</h2><p>Watchlist to confirmed exits · IST</p></div><span class="subtle-tag" id="tradingWindow">—</span></div>
+  <ol class="opening-workflow" aria-label="Opening workflow">
+    <li id="stageWatchlist"><a href="#signals"><span>01 · Watchlist</span><strong id="workflowWatchlist">Waiting</strong><small>09:15 lock</small></a></li>
+    <li id="stageRange"><a href="#market"><span>02 · Opening range</span><strong id="workflowRange">Waiting</strong><small>09:15–09:16 candle</small></a></li>
+    <li id="stageEntries"><a href="#settings"><span>03 · Entries</span><strong id="workflowEntries">Waiting</strong><small>Cutoff <span id="sessionCutoff">—</span> IST</small></a></li>
+    <li id="stageExit"><a href="#positions"><span>04 · Exits</span><strong id="workflowExit">Waiting</strong><small>Square-off <span id="squareOffTime">—</span> IST</small></a></li>
+  </ol>
+  <div class="session-strip" aria-label="Broker and feed freshness">
+    <div><span>Kotak books</span><strong id="bookFreshness">—</strong><small id="bookLastSync">Waiting for sync</small></div>
+    <div><span>Dhan entry ticks</span><strong id="tickFreshness">—</strong><small id="tickLastTrade">Waiting for feed</small></div>
+  </div>
+  <div class="session-foot"><span id="session">—</span><span>Research <strong id="count">—</strong></span><span>India VIX <strong id="vix">—</strong></span><span class="pill" id="source">UNAVAILABLE</span></div>
+  <p class="context-note" id="vixAsOf">Dhan index context</p>
+</article>
 <article class="panel connections-overview"><div class="panel-heading"><div><h2>Live connections</h2><p>Authentication and account freshness</p></div><a href="#connections" class="text-button">Details ↗</a></div><div id="overviewConnections" class="connection-list"></div></article>
 </div>
 </section>
@@ -51,8 +72,18 @@
 <article class="panel table-panel market-panel" id="mappingPanel" hidden><div class="panel-heading"><div><h2>Verified broker instrument mapping</h2><p id="mappingInfo">Waiting for verified candidates.</p></div><button class="secondary small" data-export="mapping">Export CSV ↗</button></div><div class="table-scroll"><table><thead><tr><th>Signal symbol</th><th>Dhan NSE ID</th><th>Kotak trading symbol</th><th>Kotak token</th><th>Status</th></tr></thead><tbody id="mappingBody"></tbody></table></div></article>
 </section>
 <section class="view" id="view-positions" aria-label="Positions and profit and loss" hidden>
+<div class="overview-metrics">
+<article class="metric"><div class="metric-top"><span>Total gross P&amp;L</span></div><div class="value" id="positionTotalPnl">—</div><p>Realized plus unrealized, before fees</p></article>
+<article class="metric"><div class="metric-top"><span>Realized gross</span></div><div class="value" id="positionRealizedPnl">—</div><p>From the Kotak position book</p></article>
+<article class="metric"><div class="metric-top"><span>Unrealized gross</span></div><div class="value" id="positionUnrealizedPnl">—</div><p>Marked to fresh Dhan ticks</p></article>
+<article class="metric"><div class="metric-top"><span>Open positions</span></div><div class="value" id="positionOpenCount">—</div><p>Nonzero Kotak NSE cash quantities</p></article>
+</div>
 <div class="workspace-toolbar"><div class="search-box"><span>⌕</span><input id="positionSearch" data-search="positions" type="search" placeholder="Search positions…" aria-label="Search positions"/></div><div class="filter-tabs" id="positionFilters"><button data-filter="all" aria-pressed="true">All positions</button><button data-filter="open" aria-pressed="false">Open</button><button data-filter="closed" aria-pressed="false">Closed</button></div><button class="secondary small" data-export="positions">Export CSV ↗</button></div>
 <article class="panel table-panel"><div class="panel-heading"><div><h2>LIVE Kotak positions</h2><p id="positionsAsOf">Waiting for the live account book.</p></div><span class="subtle-tag" id="positionResultCount">0 positions</span></div><div class="table-scroll"><table><thead><tr><th>Stock / side</th><th class="numeric">Net qty</th><th class="numeric">Live LTP</th><th class="numeric">Realized gross</th><th class="numeric">Unrealized gross</th><th class="numeric">Total gross</th><th>Valuation</th><th></th></tr></thead><tbody id="positionBody"></tbody></table></div><div class="table-note">Gross values exclude fees. Missing live quotes or unverified cost basis stay unavailable.</div><div class="pagination" id="positionsPagination"></div></article>
+<article class="panel table-panel">
+<div class="panel-heading"><div><h2>Closed ORB trades today</h2><p id="positionClosedAsOf">Loading confirmed exits…</p></div><a href="#journal" class="panel-link">Trade history <span>→</span></a></div>
+<div class="table-scroll"><table><thead><tr><th>Stock</th><th>Direction</th><th class="numeric">Closed qty</th><th class="numeric">Entry avg</th><th class="numeric">Exit avg</th><th class="numeric">Realized gross</th></tr></thead><tbody id="positionClosedBody"></tbody></table></div>
+</article>
 </section>
 <section class="view" id="view-orders" aria-label="Order book" hidden>
 <div class="workspace-toolbar"><div class="search-box"><span>⌕</span><input id="orderSearch" data-search="orders" type="search" placeholder="Search stock, order ID, or tag…" aria-label="Search orders"/></div><label class="select-label">Status<select id="orderStatus"><option value="all">All statuses</option><option value="open">Open / pending</option><option value="complete">Completed</option><option value="rejected">Rejected / cancelled</option></select></label><button class="secondary small" data-export="orders">Export CSV ↗</button></div>
@@ -62,13 +93,64 @@
 <div class="workspace-toolbar"><div class="search-box"><span>⌕</span><input id="fillSearch" data-search="fills" type="search" placeholder="Search stock or fill ID…" aria-label="Search fills"/></div><button class="secondary small" data-export="fills">Export CSV ↗</button></div>
 <article class="panel table-panel"><div class="panel-heading"><div><h2>Real executed fills</h2><p>Confirmed broker executions; order intents are separate</p></div><span class="subtle-tag" id="fillCount">—</span></div><div class="table-scroll"><table><thead><tr><th>Fill ID</th><th>Stock</th><th class="numeric">Filled quantity</th><th class="numeric">Fill price</th><th>Broker time</th><th></th></tr></thead><tbody id="fillBody"></tbody></table></div><div class="pagination" id="fillsPagination"></div></article>
 </section>
+<section class="view" id="view-journal" aria-label="Trade journal and performance" hidden>
+<div class="notice">Historical analytics use Kotak-confirmed entry and exit fills. P&amp;L is gross; fees and taxes are unavailable unless supplied by the broker. Metrics describe past outcomes and do not change the strategy.</div>
+<div class="overview-metrics journal-metrics">
+<article class="metric"><div class="metric-top"><span>Closed trades</span></div><div class="value" id="journalClosed">—</div><p>Confirmed entry and exit fills</p></article>
+<article class="metric"><div class="metric-top"><span>Realized gross</span></div><div class="value" id="journalGross">—</div><p>Confirmed exits · before fees</p></article>
+<article class="metric"><div class="metric-top"><span>Win rate</span></div><div class="value" id="journalWinRate">—</div><p>Closed trades only</p></article>
+<article class="metric"><div class="metric-top"><span>Open / pending</span></div><div class="value" id="journalOpen">—</div><p>Includes unresolved entry or exit</p></article>
+<article class="metric"><div class="metric-top"><span>Gross losses</span></div><div class="value" id="journalLoss">—</div><p>Closed losing trades · before fees</p></article>
+<article class="metric"><div class="metric-top"><span>Closed capital return</span></div><div class="value" id="journalReturn">—</div><p>Gross P&amp;L ÷ confirmed entry notional</p></article>
+</div>
+<article class="panel table-panel"><div class="panel-heading"><div><h2>Trade performance</h2><p id="journalAsOf">Loading persisted trade history…</p></div><span class="subtle-tag" id="journalFees">FEES UNAVAILABLE</span></div><div class="table-scroll"><table><thead><tr><th>Date</th><th>Stock</th><th>Direction</th><th>State</th><th class="numeric">Entry qty</th><th class="numeric">Exit qty</th><th class="numeric">Entry avg</th><th class="numeric">Exit avg</th><th class="numeric">Gross realized</th></tr></thead><tbody id="journalTradeBody"></tbody></table></div></article>
+<article class="panel table-panel"><div class="panel-heading"><div><h2>Order lifecycle history</h2><p>Durable intent state changes observed by the dashboard</p></div></div><div class="table-scroll"><table><thead><tr><th>Time</th><th>Stock</th><th>Phase</th><th>Side</th><th>State</th><th>Details</th></tr></thead><tbody id="journalEventBody"></tbody></table></div></article>
+<article class="panel table-panel"><div class="panel-heading"><div><h2>Persisted broker fills</h2><p>Deduplicated history collected during broker-book refreshes</p></div><span class="subtle-tag" id="journalFillCount">0 fills</span></div><div class="table-scroll"><table><thead><tr><th>Time</th><th>Stock</th><th>Side</th><th class="numeric">Quantity</th><th class="numeric">Price</th><th>Broker fill ID</th><th>Order ID</th></tr></thead><tbody id="journalFillBody"></tbody></table></div><div class="table-note">History begins when this version is deployed. Older fills are not backfilled.</div></article>
+</section>
 <section class="view" id="view-connections" aria-label="Connections and diagnostics" hidden>
 <div class="connection-cards" id="connectionCards"></div>
 <div class="diagnostic-layout"><article class="panel"><div class="panel-heading"><div><h2>Read-only connection checks</h2><p>Checks dashboard endpoints without sending a signal or order.</p></div><button class="primary small" id="runChecks">Run checks <span>↗</span></button></div><div id="checkResults" class="check-results"><div class="empty-state"><span class="empty-symbol">◎</span><h3>Verify the live connections</h3><p>Run a read-only check of health, readiness, account APIs, and the current stream.</p></div></div></article><article class="panel"><div class="panel-heading"><div><h2>Readiness checklist</h2><p id="allGateSummary">Waiting for state.</p></div></div><div id="allGates" class="gate-list full"></div></article></div>
 <article class="panel audit-panel"><div class="panel-heading"><h2>Session audit</h2><span class="subtle-tag" id="auditState">WAITING</span></div><div class="detail"><p id="diagnostics">Waiting for broker authentication.</p><p id="errors">Waiting for status.</p><p id="intentInfo">No ledger state received.</p></div></article>
 </section>
 <section class="view" id="view-settings" aria-label="Trading configuration" hidden>
-<div class="settings-layout"><article class="panel"><div class="panel-heading"><div><h2>Trading configuration</h2><p>Persisted session limits. Editing requires disarmed orders.</p></div><span class="pill" id="settingsState">WAITING</span></div><form id="settingsForm" class="settings-form"><div class="form-section-title">POSITION SIZING</div><div class="form-grid"><label>Allocation per stock <span>₹</span><input id="settingAllocation" type="number" min="1000" max="20000000" step="1000" required/><small>Maximum reference allocation for each candidate</small></label><label>Total gross cap <span>₹</span><input id="settingGross" type="number" min="1000" max="100000000" step="1000" required/><small>Combined notional limit for the session</small></label></div><div class="form-section-title">POSITION LIMITS</div><div class="form-grid three"><label>Maximum open stocks<input id="settingMaxPositions" type="number" min="1" max="10" step="1" required/></label><label>Maximum LONG<input id="settingMaxLong" type="number" min="1" max="5" step="1" required/></label><label>Maximum SHORT<input id="settingMaxShort" type="number" min="1" max="5" step="1" required/></label></div><div class="form-section-title">SESSION TIMING · IST</div><div class="form-grid"><label>Stop new entries at<input id="settingCutoff" type="time" required/></label><label>Square-off time<input id="settingExit" type="time" required/></label></div><div class="form-actions"><p id="settingsMessage" role="status">Live settings load automatically.</p><button id="resetSettings" class="secondary" type="button">Discard edits</button><button id="saveSettings" class="primary" type="submit" disabled>Save configuration</button></div></form></article><div class="settings-side"><article class="panel"><div class="panel-heading"><h2>Order authorization</h2><span class="subtle-tag">MANUAL CONTROL</span></div><div class="detail"><p id="armNotice">Checking order permission.</p><p class="muted">Arming permits actual Kotak orders after all session prerequisites pass.</p><button id="arm" class="primary" disabled>Authorize real-money orders</button><button id="disarm" class="danger" disabled>Disarm new entries</button></div></article><article class="panel"><div class="panel-heading"><h2>Execution policy</h2></div><div class="detail"><p id="policy">Waiting for the live policy.</p><p class="muted">Configuration changes do not create signals, open positions, or arm the session.</p></div></article></div></div>
+<div class="settings-layout">
+  <article class="panel">
+    <div class="panel-heading"><div><h2>Trading limits</h2><p>Saved to the live ledger. Editable while disarmed.</p></div><span class="pill" id="settingsState">WAITING</span></div>
+    <form id="settingsForm" class="settings-form">
+      <div class="form-section-title">CAPITAL</div>
+      <div class="form-grid">
+        <label>Allocation per stock <span>₹</span><input id="settingAllocation" type="number" inputmode="decimal" min="1000" max="20000000" step="0.01" required/><small>Same reference budget for every eligible stock. Quantity rounds down at the breakout price.</small></label>
+        <label>Total gross cap <span>₹</span><input id="settingGross" type="number" inputmode="decimal" min="1000" max="100000000" step="0.01" required/><small>Combined entry notional limit across LONG and SHORT positions.</small></label>
+      </div>
+      <div class="form-section-title">POSITION LIMITS</div>
+      <div class="form-grid three">
+        <label>Maximum stocks<input id="settingMaxPositions" type="number" min="1" max="10" step="1" required/><small>Across both directions</small></label>
+        <label>Maximum LONG<input id="settingMaxLong" type="number" min="1" max="5" step="1" required/></label>
+        <label>Maximum SHORT<input id="settingMaxShort" type="number" min="1" max="5" step="1" required/></label>
+      </div>
+      <div class="form-section-title">SESSION TIMING · IST</div>
+      <div class="form-grid">
+        <label>Stop new entries at<input id="settingCutoff" type="time" min="09:16:01" max="09:30" step="1" required/><small>Latest permitted cutoff is 09:30.</small></label>
+        <label>Square-off at<input id="settingExit" type="time" min="09:16:02" max="15:30" step="1" required/><small>Must follow the entry cutoff. Closes confirmed bot positions.</small></label>
+      </div>
+      <p id="settingsValidation" class="settings-validation" aria-live="polite" hidden></p>
+      <div class="form-actions"><p id="settingsMessage" role="status">Live settings load automatically.</p><button id="resetSettings" class="secondary" type="button">Discard edits</button><button id="saveSettings" class="primary" type="submit" disabled>Save configuration</button></div>
+    </form>
+  </article>
+  <div class="settings-side">
+    <article class="panel"><div class="panel-heading"><div><h2>Capital preview</h2><p>Based on the values in this form</p></div></div>
+      <dl class="settings-summary"><div><dt>Maximum planned allocation</dt><dd id="settingsPlanned">—</dd></div><div><dt>Full-size allocations</dt><dd id="settingsSlots">—</dd></div><div><dt>Available Kotak funds</dt><dd id="settingsFunds">—</dd></div></dl>
+      <p class="settings-preview-note" id="settingsFundingNote">Waiting for live account data.</p>
+      <div class="settings-calculator">
+        <label for="settingsPrice">Example breakout price (₹)</label>
+        <input id="settingsPrice" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="Enter a price"/>
+        <p id="settingsShares" aria-live="polite">Enter a price to estimate whole shares per stock.</p>
+      </div>
+    </article>
+    <article class="panel"><div class="panel-heading"><h2>Order authorization</h2><span class="subtle-tag">MANUAL CONTROL</span></div><div class="detail"><p id="armNotice">Checking order permission.</p><p class="muted">Arming permits actual Kotak orders after all session prerequisites pass.</p><button id="arm" class="primary" disabled>Authorize real-money orders</button><button id="disarm" class="danger" disabled>Disarm new entries</button></div></article>
+    <article class="panel"><div class="panel-heading"><h2>Saved execution policy</h2></div><div class="detail"><p id="policy">Waiting for the live policy.</p><p class="muted">The watchlist locks at 09:15 IST. Entries use the completed 09:15–09:16 opening range and the first qualifying crossing.</p></div></article>
+  </div>
+</div>
 </section>
 </div>
 <footer class="statusbar"><span><i id="streamDot" class="status-dot"></i><span id="streamLabel">Connecting to live state</span></span><span id="updated">Waiting for update</span><span>NSE EQ <span class="status-divider">/</span> Asia/Kolkata</span></footer>
@@ -76,5 +158,5 @@
 <dialog id="armModal" class="modal"><div class="dialog-heading"><div><p class="eyebrow">REAL-MONEY EXECUTION</p><h2>Authorize this session</h2></div><button class="icon-button" id="cancelArm" aria-label="Close authorization">×</button></div><p class="muted">Confirm the session limits and broker readiness before authorizing orders.</p><form id="armForm"><label for="authorization">Type the authorization phrase</label><input id="authorization" autocomplete="off" required placeholder="I AUTHORIZE LIVE KOTAK ORDERS"/><label for="otp">Operator verification code</label><input id="otp" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" required/><p id="armError" class="negative" role="alert"></p><button type="submit" class="danger">Authorize real orders</button></form></dialog>
 <dialog id="detailDialog" class="detail-dialog"><div class="dialog-heading"><div><p class="eyebrow" id="detailEyebrow">BROKER DETAIL</p><h2 id="detailTitle">Details</h2></div><button class="icon-button" id="closeDetail" aria-label="Close details">×</button></div><div id="detailContent"></div></dialog>
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js" defer></script>
+<script src="static/app.js" defer></script>
 </body></html>

@@ -1,6 +1,6 @@
 # Kotak Live Trading System
 
-One direct path: **Codex weekday schedule → HTTPS signal bridge → Dhan symbol map and 09:15 ORB → Kotak Neo**. The scheduler researches candidates and sends one schema-valid report; GitHub is only for code releases.
+One direct path: **Codex schedule → HTTPS signal bridge → Dhan symbol map and 09:15 ORB → Kotak Neo**. The scheduler can run any day and time; off-session reports map symbols without starting ORB monitoring. GitHub is only for code releases.
 
 The [5 November production acceptance record](reports/production-hardening-2026-11-05.md) documents the deployed startup/08:00 IST authentication, broker-book and live P&L fixes, 130 passing tests, 495-symbol dual-broker mapping audit, live dashboard checks, and remaining market-session acceptance gates. Production remains disarmed; simulated test fills are not live execution evidence.
 
@@ -8,7 +8,7 @@ The [dashboard workspace guide](reports/dashboard-workspace-2026-11-05.md) cover
 
 ## Daily flow
 
-1. The Codex schedule follows its existing weekday schedule and sends newly qualified symbols, up to five LONG and five SHORT for the session. The bridge accepts additional batches during the session.
+1. The Codex schedule can run on any calendar day and at any time. It sends only newly qualified symbols, up to five LONG and five SHORT per daily report; off-session reports are accepted for mapping without starting ORB monitoring.
 2. `node bridge/send_codex.js <report.json>` reads the HTTPS bridge URL and one bearer token from the ignored project `.env`, then sends each new batch to `https://deltacapitals.systems/api/v1/signals/incoming`.
 3. The bridge validates the date, timestamps, symbols and report format, then adds new symbols to today's signal list. The scheduler confirms `ACCEPTED` or `DUPLICATE`; otherwise it reports `NOT DELIVERED`.
 4. Dhan maps each new NSE symbol, supplies its 09:15 one-minute candle and subscribes it on the current live feed. A LONG qualifies on a cross above the candle high; a SHORT qualifies on a cross below its low.
@@ -40,7 +40,7 @@ Start a PostgreSQL 16 server and create the `kotak_live` database first. Use a U
 
 ## Codex scheduler setup
 
-The Codex automation is named **Daily Kotak signals to dashboard** and follows its existing weekday schedule. It uses the existing `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` entries in the ignored local `.env`; it does not need an OpenAI API key or a separate ChatGPT HTTP action. The project includes the small Node sender, so no Python install is needed for delivery.
+The Codex automation is named **Daily Kotak signals to dashboard**. It uses the existing `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` entries in the ignored local `.env`; it does not need an OpenAI API key or a separate ChatGPT HTTP action. The project includes the small Node sender, so no Python install is needed for delivery.
 
 The receiver is public at the HTTPS route above, with Nginx forwarding `/api/v1/` to the loopback-only live app. Signal submission uses the bridge token. Dashboard login and per-session operator arming protect account controls and live orders; the scheduler cannot arm orders.
 

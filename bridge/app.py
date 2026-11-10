@@ -7,12 +7,13 @@ import hmac
 import json
 import os
 import sys
-from datetime import datetime, time
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text, create_engine, select, update
+from sqlalchemy import (Column, DateTime, Integer, MetaData, String, Table, Text,
+                        create_engine, select, text, update)
 from sqlalchemy.exc import IntegrityError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -89,15 +90,22 @@ def create_app(*, database_url: str | None = None, bearer_token: str | None = No
                      allowed_symbols=allowed_symbols)
             if payload["session_date"] is None:
                 raise ValueError("Bootstrap unavailable report is not a session delivery")
-            if current.time() < time(9, 0):
-                raise ValueError("Report arrived before the 09:00 session start")
-            if payload["status"] == "READY" and current.time() >= time(15, 0):
-                raise ValueError("READY report arrived after the 15:00 entry cutoff")
         except (ValueError, TypeError, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         digest = hashlib.sha256(raw.encode()).hexdigest()
         with engine.begin() as connection:
+            # Serialize independent batches for this session across app workers.
+            # Without this lock, concurrent first batches can race on the unique
+            # signal_reports.session_date row and one valid batch is rejected.
+            connection.execute(text(
+                "SELECT pg_advisory_xact_lock(hashtext('signal-ingest'), hashtext(:day))"
+            ), {"day": payload["session_date"]})
+            # The executable watchlist uses server receipt time. Sample it
+            # after the lock so a queued request cannot be backdated.
+            current = clock().astimezone(IST)
+            if payload["session_date"] != current.date().isoformat():
+                raise HTTPException(status_code=422, detail="Session date changed while accepting report")
             existing_batch = connection.execute(select(signal_batches).where(
                 signal_batches.c.idempotency_key == idempotency_key)).mappings().first()
             if existing_batch:

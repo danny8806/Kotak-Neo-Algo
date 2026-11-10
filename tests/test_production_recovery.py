@@ -11,6 +11,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from time import perf_counter_ns
 from unittest.mock import patch
 
 from live_desk.dhan_data import IST, DhanTokenSupervisor
@@ -291,6 +292,112 @@ class ProductionReplayTests(unittest.TestCase):
         self.assertEqual(runtime._submit_and_reconcile(intent,NOW)['state'],'ABORTED')
         self.assertEqual(runtime.broker.calls,[])
 
+    def test_disarm_during_broker_pacing_aborts_before_sdk_dispatch(self):
+        broker = ReplayExchange()
+        session = KotakSession(lambda: broker, clock=lambda: NOW)
+        self.assertTrue(session.ensure_authenticated())
+        runtime = self.runtime(session)
+        entered, release = threading.Event(), threading.Event()
+
+        def pace():
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("Test did not release the rate limiter")
+
+        with patch.object(session.order_limiter, "acquire", side_effect=pace):
+            try:
+                self.cross(runtime)
+                self.assertTrue(entered.wait(2))
+                runtime.enabled = False
+            finally:
+                release.set()
+            self.assertTrue(runtime.wait_for_submissions())
+
+        self.assertEqual(broker.calls, [])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"], "ABORTED")
+        self.assertEqual(runtime.errors, [])
+
+    def test_cutoff_during_broker_pacing_aborts_before_sdk_dispatch(self):
+        broker=ReplayExchange()
+        session=KotakSession(lambda:broker,clock=lambda:NOW)
+        self.assertTrue(session.ensure_authenticated())
+        runtime=self.runtime(session)
+        before=NOW.replace(minute=29,second=59)
+        cutoff=before+timedelta(seconds=1)
+        clock=[before]
+        runtime.clock=lambda:clock[0]
+
+        def pace():
+            clock[0]=cutoff
+
+        with patch.object(session.order_limiter,"acquire",side_effect=pace):
+            runtime.on_tick({"symbol":"TESTA","ltp":"100","timestamp":before})
+            self.assertIsNotNone(runtime.on_tick({"symbol":"TESTA","ltp":"101","timestamp":before}))
+            self.assertTrue(runtime.wait_for_submissions())
+        self.assertEqual(broker.calls,[])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"],"ABORTED")
+
+    def test_reconnect_during_broker_pacing_aborts_old_feed_order(self):
+        broker=ReplayExchange()
+        session=KotakSession(lambda:broker,clock=lambda:NOW)
+        self.assertTrue(session.ensure_authenticated())
+        runtime=self.runtime(session)
+        feed=LiveTicker(None,{"TESTA":"123"},lambda _:None)
+        feed.subscribed_socket=object()
+        feed._set(state="CONNECTED",connection_generation=1)
+        runtime.feed_is_current=feed.connection_is_current
+
+        def reconnect_during_pacing():
+            feed._set(state="RECONNECTING")
+            self.assertFalse(feed.connection_is_current(1))
+            feed.subscribed_socket=object()
+            feed._set(state="CONNECTED",connection_generation=2)
+
+        with patch.object(session.order_limiter,"acquire",side_effect=reconnect_during_pacing):
+            runtime.on_tick({"symbol":"TESTA","ltp":"100","timestamp":NOW,"feed_generation":1})
+            self.assertIsNotNone(runtime.on_tick({
+                "symbol":"TESTA","ltp":"101","timestamp":NOW,"feed_generation":1}))
+            self.assertTrue(runtime.wait_for_submissions())
+        self.assertTrue(feed.connection_is_current(2))
+        self.assertEqual(broker.calls,[])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"],"ABORTED")
+        self.assertEqual(runtime.dispatch_latency()["samples"],0)
+
+    def test_cutoff_cancels_once_then_eod_exits_late_confirmed_partial_fill(self):
+        broker=ReplayExchange()
+        runtime=self.runtime(broker)
+        intent=self.reserve()
+        tag=intent["tag"]
+        self.ledger.mark_submission_unknown(tag,NOW)
+        self.ledger.apply_broker_report(self.report(tag),NOW)
+        cutoff=NOW.replace(minute=30)
+        eod=NOW.replace(hour=15,minute=15)
+        runtime.clock=lambda:eod
+
+        def report(_broker, order_tag):
+            if order_tag==tag:
+                return self.report(tag,status="cancelled",filled_quantity=2,average_fill_price="100")
+            return self.report(order_tag,status="rejected",ordered_quantity=2,broker_order_id="SIM-1")
+
+        read_positions=lambda:[{"symbol":"TESTA","product":"MIS","net_quantity":2}]
+        with patch("live_desk.runtime.cancel_kotak_order",side_effect=TimeoutError) as cancel, \
+             patch("live_desk.runtime.reconcile_kotak_tag",side_effect=report):
+            runtime.cancel_working_entries(cutoff-timedelta(seconds=1))
+            cancel.assert_not_called()
+            runtime.cancel_working_entries(cutoff)
+            runtime.cancel_working_entries(cutoff)
+            self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"],"CANCEL_PENDING")
+            self.assertEqual(broker.calls,[])
+            cancel.assert_called_once_with(broker,"OID")
+            self.assertEqual(len(runtime.exit_due(eod,read_positions=read_positions)),1)
+            self.assertEqual(runtime.exit_due(eod,read_positions=read_positions),[])
+        entry, exit_order=self.ledger.snapshot(NOW.date())
+        self.assertEqual((entry["state"],entry["filled_quantity"]),("PARTIAL_CANCELLED",2))
+        self.assertEqual((exit_order["state"],exit_order["quantity"]),("REJECTED",2))
+        self.assertEqual(len(broker.calls),1)
+        self.assertEqual(broker.calls[0]["transaction_type"],"S")
+        self.assertTrue(any("shares remaining" in error for error in runtime.errors))
+
     def test_twenty_duplicate_binary_ticks_submit_exactly_one_market_order(self):
         broker=ReplayExchange();broker.filled=True;runtime=self.runtime(broker)
         runtime.on_tick({'symbol':'TESTA','ltp':'100','timestamp':NOW})
@@ -316,37 +423,110 @@ class ProductionReplayTests(unittest.TestCase):
             tick=pool.submit(runtime.on_tick,{'symbol':'TESTA','ltp':'99','timestamp':NOW})
             self.assertIsNone(tick.result(timeout=.5));release.set();pending.result(timeout=2)
 
+    def test_slow_reservation_does_not_block_ticks_and_disarm_prevents_send(self):
+        runtime = self.runtime()
+        started, release = threading.Event(), threading.Event()
+        reserve = self.ledger.reserve_entry
+
+        def slow_reserve(**kwargs):
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("Test did not release the reservation")
+            return reserve(**kwargs)
+
+        with patch.object(self.ledger, "reserve_entry", side_effect=slow_reserve):
+            try:
+                self.assertEqual(self.cross(runtime)["state"], "SUBMISSION_QUEUED")
+                self.assertTrue(started.wait(1))
+                runtime.on_tick({"symbol": "TESTA", "ltp": "102", "timestamp": NOW})
+                self.assertEqual(runtime.previous["TESTA"], Decimal("102"))
+                runtime.enabled = False
+            finally:
+                release.set()
+            self.assertTrue(runtime.wait_for_submissions())
+
+        self.assertEqual(runtime.broker.calls, [])
+        self.assertEqual(self.ledger.snapshot(NOW.date())[0]["state"], "ABORTED")
+
     def test_malformed_ticks_are_ignored_without_killing_feed_callback(self):
         runtime=self.runtime()
         for price in (None,'bad','NaN','Infinity',0,-1):
             self.assertIsNone(runtime.on_tick({'symbol':'TESTA','ltp':price,'timestamp':NOW}))
         self.assertEqual(runtime.broker.calls,[])
 
-    def test_http_signal_mapping_orb_market_order_fill_exit_and_restart(self):
+    def test_ten_stock_signal_to_parallel_orb_square_off_and_dashboard_returns(self):
         from fastapi.testclient import TestClient
         from bridge.app import create_app
         from live_desk.app import create_live_app
         from live_desk.supervisor import LiveSupervisor
         from live_desk.dhan_instruments import DhanMasterSnapshot
         from test_failure_cases import ready_fixture
-        now=[NOW.replace(minute=3)]
+        now=[NOW.replace(minute=14)]
+        ids = dict(RELIANCE="2885", TCS="11536", INFY="1594", HDFCBANK="1333",
+                   ICICIBANK="4963", SBIN="3045", AXISBANK="5900", BHARTIARTL="10604",
+                   LT="11483", ITC="1660")
+        sides = {symbol: "LONG" if i < 5 else "SHORT" for i, symbol in enumerate(ids)}
+        by_id = {security_id: symbol for symbol, security_id in ids.items()}
         token='synthetic-bridge-token-at-least-thirty-two-characters'
         password='synthetic-dashboard-password'
         secret='synthetic-session-secret-at-least-thirty-two-characters'
+        master_reads=[]
         class Exchange(ReplayExchange):
+            def scrip_master(self,*,exchange_segment):
+                master_reads.append(exchange_segment)
+                return "https://lapi.kotaksecurities.com/test-nse-cash.csv"
+
             def positions(self):
-                qty=sum(int(c['quantity'])*(1 if c['transaction_type']=='B' else -1) for c in self.calls)
-                if not qty:return NO_DATA
-                return {'stat':'Ok','data':[{'exSeg':'nse_cm','trdSym':'TESTA-EQ','flBuyQty':qty,
-                    'buyAmt':str(qty*101),'prod':'MIS'}]}
+                quantities = {}
+                with self.lock:
+                    for call in self.calls:
+                        symbol = call["trading_symbol"]
+                        qty = int(call["quantity"]) * (1 if call["transaction_type"] == "B" else -1)
+                        quantities[symbol] = quantities.get(symbol, 0) + qty
+                return {"stat": "Ok", "data": [
+                    {"exSeg": "nse_cm", "trdSym": symbol, "flBuyQty": max(qty, 0),
+                     "flSellQty": max(-qty, 0), "buyAmt": str(max(qty, 0) * 101),
+                     "sellAmt": str(max(-qty, 0) * 94), "prod": "MIS"}
+                    for symbol, qty in quantities.items() if qty
+                ]}
+            def trade_report(self):
+                with self.lock:
+                    return {"stat": "Ok", "data": [
+                        {"nOrdNo": order["nOrdNo"], "trdSym": order["trdSym"],
+                         "flId": "F-" + order["nOrdNo"], "fldQty": order["qty"],
+                         "avgPrc": str(
+                             (101 if call["transaction_type"] == "B" else 103)
+                             if sides[order["trdSym"][:-3]] == "LONG"
+                             else (94 if call["transaction_type"] == "S" else 92)
+                         )}
+                        for order, call in zip(self.orders, self.calls)
+                    ]}
             def limits(self):return {'stat':'Ok','Net':'1500000'}
-            def search_scrip(self,**kwargs):return [{'pExchSeg':'nse_cm','pGroup':'EQ',
-                'pScripRefKey':'TESTA','pTrdSymbol':'TESTA-EQ','pSymbol':'456'}]
+            def search_scrip(self, **kwargs):
+                symbol = kwargs["symbol"]
+                return [{"pExchSeg": "nse_cm", "pGroup": "EQ", "pScripRefKey": symbol,
+                         "pTrdSymbol": symbol + "-EQ", "pSymbol": ids[symbol]}]
+        from unittest.mock import MagicMock
+        csv_rows=["pExchSeg,pGroup,pScripRefKey,pTrdSymbol,pSymbol"]+[
+            f"nse_cm,EQ,{symbol},{symbol}-EQ,{token}" for symbol,token in ids.items()
+        ]
+        response=MagicMock()
+        response.__enter__.return_value=response
+        response.status_code=200
+        response.iter_content.return_value=[("\n".join(csv_rows)).encode()]
+        fetch=patch("live_desk.kotak_instruments.requests.get",return_value=response)
+        master_download=fetch.start()
+        self.addCleanup(fetch.stop)
         broker=Exchange();broker.filled=True
+        candles = []
+        history_wave=threading.Barrier(len(ids))
         class Dhan:
             token='synthetic-dhan-token'
-            def get_intraday(self,*args,**kwargs):return {'timestamp':[int(NOW.replace(minute=16).timestamp())],
-                'open':[98],'high':[100],'low':[95],'close':[99]}
+            def get_intraday(self, security_id, start, end, *, interval):
+                candles.append((security_id, start, end, interval))
+                history_wave.wait(timeout=3)
+                return {"timestamp": [int(NOW.replace(minute=16).timestamp())],
+                        "open": [98], "high": [100], "low": [95], "close": [99]}
             def get_ohlc(self,*args,**kwargs):return {}
         class Auth:
             def snapshot(self):return {'state':'AUTHENTICATED'}
@@ -356,49 +536,384 @@ class ProductionReplayTests(unittest.TestCase):
             def start(self):pass
             def stop(self):pass
             def snapshot(self):return {'state':'CONNECTED','error':None}
-        master=lambda symbols,now:DhanMasterSnapshot(now.date().isoformat(),now,'synthetic-master',{'TESTA':'123'})
+        master=lambda symbols,now:DhanMasterSnapshot(now.date().isoformat(),now,'synthetic-master',
+                                                       {symbol:ids[symbol] for symbol in symbols})
         env={'LIVE_ORDERS_ALLOWED':'YES','DASHBOARD_COOKIE_SECURE':'false','LIVE_ARM_TOTP_SECRET':'synthetic-operator-secret'}
         with patch.dict(os.environ,env):
-            bridge=create_app(database_url=self.url,bearer_token=token,now_provider=lambda:now[0],allowed_symbols={'TESTA'})
+            bridge=create_app(database_url=self.url,bearer_token=token,now_provider=lambda:now[0],allowed_symbols=set(ids))
             self.addCleanup(bridge.state.engine.dispose)
             desk=LiveSupervisor(bridge.state.engine,ledger_path=self.url,clock=lambda:now[0],kotak_factory=lambda:broker,
-                master_fetch=master,ticker_factory=Ticker,allowed_symbols={'TESTA'})
+                master_fetch=master,ticker_factory=Ticker,allowed_symbols=set(ids))
             self.addCleanup(desk.stop);desk.dhan=Dhan();desk.dhan_auth=Auth()
             app=create_live_app(database_url=self.url,bearer_token=token,dashboard_password=password,
                 session_secret=secret,supervisor=desk,clock=lambda:now[0],start_supervisor=False)
             self.addCleanup(app.state.engine.dispose)
             client=TestClient(app);self.addCleanup(client.close)
             report=ready_fixture(NOW.date().isoformat())
-            report['signals'][0]['first_available_at']='2026-11-04T16:00:00+05:30'
-            report['signals'][0]['sources'][0]['published_at']='2026-11-04T16:00:00+05:30'
+            fixture = report["signals"][0]
+            published_at = "2026-11-04T16:00:00+05:30"
+            report["signals"] = [
+                dict(fixture, symbol=symbol, side=sides[symbol], rank=i % 5 + 1,
+                     first_available_at=published_at,
+                     sources=[dict(fixture["sources"][0], published_at=published_at)])
+                for i, symbol in enumerate(ids)
+            ]
             response=client.post('/api/v1/signals/incoming',headers={'Authorization':'Bearer '+token,
                 'Idempotency-Key':'synthetic-e2e'},json=report)
             self.assertEqual(response.status_code,200,response.text)
-            now[0]=NOW;desk.cycle()
-            self.assertEqual(desk.dhan_ids,{'TESTA':'123'});self.assertEqual(desk.kotak_ids['TESTA'].token,'456')
-            self.assertEqual(client.post('/api/auth/login',json={'password':password}).status_code,200)
-            def emit(price):
-                packet=struct.pack('<BhBifi',2,16,1,123,float(price),int(now[0].timestamp()))
-                tick=parse_ticker(packet);tick.update(symbol='TESTA',timestamp=datetime.fromisoformat(tick['exchange_timestamp']))
+            def emit(symbol, price):
+                received_ns=perf_counter_ns()
+                packet=struct.pack('<BhBifi',2,16,1,int(ids[symbol]),float(price),int(now[0].timestamp()))
+                tick=parse_ticker(packet)
+                tick.update(symbol=by_id[tick["security_id"]],timestamp=datetime.fromisoformat(tick['exchange_timestamp']))
+                tick["received_ns"]=received_ns
                 desk.on_tick(tick)
-            emit(100)
+            desk.cycle()
+            self.assertEqual(desk.dhan_ids, ids)
+            warmed_ticker=desk.ticker
+            self.assertIsNotNone(warmed_ticker)
+            self.assertIsNone(desk.runtime)
+            self.assertEqual(candles, [])
+            self.assertEqual(broker.calls, [])
+            now[0]=NOW.replace(minute=15,second=59)
+            for symbol in ids:
+                emit(symbol, 100 if sides[symbol] == "LONG" else 95)
+            now[0]=NOW.replace(minute=16)
+            desk.cycle()
+            self.assertIs(desk.ticker, warmed_ticker)
+            self.assertEqual({s: x.token for s,x in desk.kotak_ids.items()}, ids)
+            self.assertEqual(master_reads,["nse_cm"])
+            master_download.assert_called_once()
+            self.assertEqual(set(candles), {
+                (d, NOW.replace(minute=15), NOW.replace(minute=17), "1") for d in ids.values()
+            })
+            self.assertEqual(desk.opening_ranges, {s: (Decimal(100), Decimal(95)) for s in ids})
+            self.assertEqual(client.post('/api/auth/login',json={'password':password}).status_code,200)
             with patch('live_desk.app.totp_now',return_value='123456'):
                 response=client.post('/api/live/arm',headers={'Origin':'http://testserver'},json={
                     'acknowledgement':'I AUTHORIZE LIVE KOTAK ORDERS','totp':'123456'})
             self.assertEqual(response.status_code,200,response.text)
-            emit(101);self.assertTrue(desk.runtime.wait_for_submissions())
+            barrier = threading.Barrier(20)
+            def cross(symbol):
+                barrier.wait(timeout=5)
+                emit(symbol, 101 if sides[symbol] == "LONG" else 94)
+            with ThreadPoolExecutor(max_workers=20) as pool:
+                list(pool.map(cross, list(ids) * 2))
+            self.assertTrue(desk.runtime.wait_for_submissions())
             desk.refresh_broker()
             state=client.get('/api/state').json()
-            self.assertEqual(state['intents'][0]['state'],'FILLED')
-            self.assertEqual(len(broker.calls),1);self.assertEqual(broker.calls[0]['order_type'],'MKT')
+            self.assertEqual(len(state["intents"]), 10)
+            latency=state["entry_dispatch_latency"]
+            self.assertEqual(latency["samples"],10)
+            self.assertGreaterEqual(latency["p95_ms"],latency["p50_ms"])
+            print(f"Simulated 10-stock dispatch timing: {latency}",flush=True)
+            self.assertTrue(all(row["state"] == "FILLED" for row in state["intents"]))
+            self.assertEqual(len(broker.calls), 10)
+            for call in broker.calls:
+                symbol = call["trading_symbol"][:-3]
+                long = sides[symbol] == "LONG"
+                self.assertEqual((call["trading_symbol"], call["transaction_type"], call["quantity"],
+                                  call["exchange_segment"], call["product"], call["order_type"]),
+                                 (symbol + "-EQ", "B" if long else "S", "990" if long else "1063",
+                                  "nse_cm", "MIS", "MKT"))
             now[0]=NOW.replace(hour=15,minute=15);desk.cycle()
-            self.assertTrue(all(row['state']=='FILLED' for row in desk.ledger.snapshot(NOW.date())))
-            self.assertEqual(len(broker.calls),2)
+            rows = desk.ledger.snapshot(NOW.date())
+            self.assertEqual(len(rows), 20)
+            self.assertTrue(all(row["state"] == "FILLED" for row in rows))
+            self.assertEqual(len(broker.calls), 20)
+            journal = client.get("/api/live/journal").json()
+            self.assertEqual(len(journal["fills"]), 20)
+            self.assertEqual(journal["summary"]["closed_trade_count"], 10)
+            dashboard=client.get("/api/state").json()
+            self.assertEqual({row["symbol"]:row for row in dashboard["closed_trades"]},
+                             {row["symbol"]:row for row in journal["trades"]})
+            self.assertEqual(journal["summary"]["open_trade_count"], 0)
+            self.assertEqual(journal["summary"]["gross_realized_from_exits"], 20530)
+            self.assertEqual(journal["summary"]["closed_trade_return_pct"], 2.05)
+            self.assertEqual(journal["summary"]["win_rate_pct"], 100)
+            self.assertIsNone(journal["summary"]["net_after_fees"])
+            self.assertTrue(all(row["remaining_quantity"] == 0 for row in journal["trades"]))
             now[0]+=timedelta(seconds=16);desk.cycle()
-            self.assertEqual(len(broker.calls),2,'Completed exits must not cause another exit or position mismatch')
+            self.assertEqual(len(broker.calls),20,'Completed exits must not cause another exit or position mismatch')
             desk.stop()
             restarted=LiveSupervisor(bridge.state.engine,ledger_path=self.url,clock=lambda:now[0],kotak_factory=lambda:broker,
-                master_fetch=master,ticker_factory=Ticker,allowed_symbols={'TESTA'})
+                master_fetch=master,ticker_factory=Ticker,allowed_symbols=set(ids))
             self.addCleanup(restarted.stop);restarted.dhan=Dhan();restarted.dhan_auth=Auth()
             restarted.cycle()
-            self.assertFalse(restarted.armed);self.assertEqual(len(broker.calls),2)
+            self.assertFalse(restarted.armed);self.assertEqual(len(broker.calls),20)
+
+    def test_five_trading_days_roll_over_watchlists_and_keep_one_journal(self):
+        from fastapi.testclient import TestClient
+        from live_desk.app import create_live_app
+        from live_desk.dhan_instruments import DhanMasterSnapshot
+        from live_desk.supervisor import LiveSupervisor
+        from test_failure_cases import ready_fixture
+
+        start=datetime(2026,11,2,9,14,tzinfo=IST)
+        now=[start]
+        symbols={"TESTA":"101","TESTB":"102","TESTC":"103","TESTD":"104"}
+        cancelled=[]
+        candles=[]
+        token="five-day-synthetic-bridge-token-long-enough"
+        password="five-day-synthetic-password"
+        secret="five-day-synthetic-session-secret-long-enough"
+
+        class Exchange(ReplayExchange):
+            def place_order(self, **kwargs):
+                with self.lock:
+                    oid=f"SIM-{len(self.calls)+1}"
+                    self.calls.append(kwargs)
+                    self.orders.append({
+                        "GuiOrdId":kwargs["tag"],"nOrdNo":oid,"qty":kwargs["quantity"],
+                        "ordSt":"open" if kwargs["trading_symbol"]=="TESTB-EQ" else "complete",
+                        "trdSym":kwargs["trading_symbol"],"trnsTp":kwargs["transaction_type"],
+                        "day":now[0].date(),
+                    })
+                return {"stat":"Ok","nOrdNo":oid}
+
+            def order_report(self):
+                with self.lock:
+                    return {"stat":"Ok","data":[dict(o) for o in self.orders if o["day"]==now[0].date()]}
+
+            def trade_report(self):
+                rows=self.order_report()["data"]
+                return {"stat":"Ok","data":[
+                    {"nOrdNo":o["nOrdNo"],"trdSym":o["trdSym"],"flId":"F-"+o["nOrdNo"],
+                     "fldQty":o["qty"],"avgPrc":"101" if o["trnsTp"]=="B" else "102",
+                     "trnsTp":o["trnsTp"]}
+                    for o in rows if o["ordSt"]=="complete"]}
+
+            def positions(self):
+                net={}
+                for row in self.order_report()["data"]:
+                    if row["ordSt"]=="complete":
+                        sign=1 if row["trnsTp"]=="B" else -1
+                        symbol=row["trdSym"]
+                        net[symbol]=net.get(symbol,0)+sign*int(row["qty"])
+                return {"stat":"Ok","data":[
+                    {"exSeg":"nse_cm","trdSym":s,"prod":"MIS","flBuyQty":max(qty,0),
+                     "flSellQty":max(-qty,0),"buyAmt":str(max(qty,0)*101),
+                     "sellAmt":str(max(-qty,0)*102)}
+                    for s,qty in net.items() if qty]}
+
+            def cancel_order(self, *, order_id):
+                cancelled.append(order_id)
+                raise TimeoutError("Simulated cancellation acknowledgement lost")
+
+            def search_scrip(self, *, symbol, **_kwargs):
+                return [{"pExchSeg":"nse_cm","pGroup":"EQ","pScripRefKey":symbol,
+                         "pTrdSymbol":symbol+"-EQ","pSymbol":symbols[symbol]}]
+
+            def limits(self):
+                return {"stat":"Ok","Net":"1500000"}
+
+        class Dhan:
+            token="simulated-dhan"
+
+            def get_intraday(self, security_id, start_at, end_at, *, interval):
+                candles.append((start_at.date(),security_id))
+                return {"timestamp":[int((start_at+timedelta(minutes=1)).timestamp())],
+                        "open":[98],"high":[100],"low":[95],"close":[99]}
+
+            def get_ohlc(self,*_args,**_kwargs):
+                return {}
+
+        class Auth:
+            def snapshot(self):
+                return {"state":"AUTHENTICATED"}
+
+            def stop(self):
+                pass
+
+        class Ticker:
+            def __init__(self,*_args):
+                self.stopped=False
+
+            def start(self):
+                pass
+
+            def stop(self):
+                self.stopped=True
+
+            def snapshot(self):
+                return {"state":"STOPPED" if self.stopped else "CONNECTED","error":None}
+
+        broker=Exchange()
+        env={"LIVE_ORDERS_ALLOWED":"YES","DASHBOARD_COOKIE_SECURE":"false",
+             "LIVE_ARM_TOTP_SECRET":"synthetic-operator-secret"}
+        with patch.dict(os.environ,env):
+            def make_desk():
+                desk=LiveSupervisor(self.ledger.engine,ledger_path=self.url,clock=lambda:now[0],
+                    kotak_factory=lambda:broker,allowed_symbols=set(symbols),ticker_factory=Ticker,
+                    master_fetch=lambda wanted,now:DhanMasterSnapshot(
+                        now.date().isoformat(),now,"synthetic-master",{s:symbols[s] for s in wanted}))
+                desk.dhan=Dhan()
+                desk.dhan_auth=Auth()
+                self.addCleanup(desk.stop)
+                app=create_live_app(database_url=self.url,bearer_token=token,dashboard_password=password,
+                    session_secret=secret,supervisor=desk,clock=lambda:now[0],start_supervisor=False)
+                self.addCleanup(app.state.engine.dispose)
+                client=TestClient(app)
+                self.addCleanup(client.close)
+                return desk,client
+
+            desk,client=make_desk()
+            def tick(symbol,price,at=None):
+                desk.on_tick({"symbol":symbol,"ltp":price,"timestamp":at or now[0]})
+
+            def report(symbol,side="LONG"):
+                data=ready_fixture(now[0].date().isoformat())
+                published=now[0].replace(hour=8,minute=30).isoformat()
+                row=data["signals"][0]
+                row.update(symbol=symbol,side=side,first_available_at=published)
+                row["sources"][0]["published_at"]=published
+                return data
+
+            def publish(data,key):
+                return client.post("/api/v1/signals/incoming",json=data,headers={
+                    "Authorization":"Bearer "+token,"Idempotency-Key":key})
+
+            def arm():
+                with patch("live_desk.app.totp_now",return_value="123456"):
+                    return client.post("/api/live/arm",headers={"Origin":"http://testserver"},json={
+                        "acknowledgement":"I AUTHORIZE LIVE KOTAK ORDERS","totp":"123456"})
+
+            day_cases=[("TESTA","LONG"),("TESTB","LONG"),("TESTC","LONG"),(None,None),("TESTA","SHORT")]
+            session_summaries=[]
+            previous_report=None
+            for day_index,(symbol,side) in enumerate(day_cases):
+                day=start+timedelta(days=day_index)
+                now[0]=day.replace(hour=8,minute=0)
+                old_ticker=desk.ticker
+                if day_index:
+                    self.assertEqual(client.get("/api/state").status_code,401)
+                if day_index==2:
+                    desk.stop()
+                    desk,client=make_desk()
+                desk.cycle()
+                self.assertEqual(client.post("/api/auth/login",json={"password":password}).status_code,200)
+                response=client.get("/api/state")
+                self.assertEqual(response.status_code,200,response.text)
+                state=response.json()
+                self.assertEqual(state["session_date"],day.date().isoformat())
+                self.assertEqual((state["signals"],state["quotes"],state["intents"],state["closed_trades"]),
+                                 ([],{},[],[]))
+                self.assertFalse(state["armed"])
+                self.assertIsNone(desk.ticker)
+                if old_ticker:
+                    self.assertTrue(old_ticker.stopped)
+
+                now[0]=day
+                if symbol is None:
+                    self.assertEqual(publish(previous_report,"five-day-stale").status_code,422)
+                    now[0]=day.replace(hour=15,minute=15)
+                    desk.cycle()
+                    self.assertEqual(desk.snapshot()["intents"],[])
+                    self.assertIsNone(desk.runtime)
+                    session_summaries.append("no signals")
+                    continue
+
+                data=report(symbol,side)
+                previous_report=data
+                response=publish(data,f"five-day-{day_index}")
+                self.assertEqual(response.status_code,200,response.text)
+                if day_index==4:
+                    self.assertEqual(publish(report("TESTC"),"five-day-untriggered").status_code,200)
+                desk.cycle()
+                self.assertIsNotNone(desk.ticker)
+                self.assertIsNone(desk.runtime)
+                baseline,cross=(100,101) if side=="LONG" else (95,94)
+                now[0]=day.replace(minute=15,second=59)
+                tick(symbol,baseline)
+                if day_index==4:
+                    tick("TESTC",100)
+                now[0]=day.replace(minute=16)
+                if day_index==4:
+                    self.assertEqual(publish(report("TESTD"),"five-day-late").status_code,200)
+                desk.cycle()
+                state=desk.snapshot()
+                eligible={symbol,"TESTC"} if day_index==4 else {symbol}
+                self.assertEqual({row["symbol"] for row in state["signals"] if row["entry_eligible"]},eligible)
+                self.assertIsNotNone(desk.runtime)
+                if day_index==4:
+                    self.assertEqual(state["signals"][-1]["symbol"],"TESTD")
+                    self.assertFalse(state["signals"][-1]["entry_eligible"])
+                if day_index==2:
+                    # Today's empty books cannot establish what happened to yesterday's DAY order.
+                    self.assertEqual(state["prior_session_recovery_count"],1)
+                    self.assertIn("PRIOR_SESSION_RECOVERY",state["readiness_blockers"])
+                    self.assertEqual(arm().status_code,409)
+                    tick(symbol,cross)
+                    self.assertEqual(len(broker.calls),3)
+                    terminal={**stalled,"ordSt":"cancelled","fldQty":0}
+                    evidence=reconcile_kotak_tag(broker,stalled["GuiOrdId"],books=([terminal],[]))
+                    desk.ledger.apply_broker_report(evidence,now[0])
+                    desk.refresh_broker()
+                    self.assertEqual(desk.snapshot()["prior_session_recovery_count"],0)
+
+                tick(symbol,baseline)
+                armed=arm()
+                self.assertEqual(armed.status_code,200,armed.text)
+                before=len(broker.calls)
+                tick(symbol,cross,day-timedelta(days=1))
+                self.assertTrue(desk.runtime.wait_for_submissions())
+                self.assertEqual(len(broker.calls),before)
+                if day_index==4:
+                    now[0]+=timedelta(seconds=6)
+                    self.assertIn("FRESH_QUOTES",desk.snapshot()["readiness_blockers"])
+                    tick(symbol,cross)
+                    self.assertTrue(desk.runtime.wait_for_submissions())
+                    self.assertEqual(len(broker.calls),before)
+                    tick(symbol,baseline)
+                tick(symbol,cross)
+                self.assertTrue(desk.runtime.wait_for_submissions())
+                self.assertEqual(len(broker.calls),before+1)
+                self.assertEqual(broker.calls[-1]["transaction_type"],"B" if side=="LONG" else "S")
+
+                now[0]=day.replace(minute=30)
+                with patch.object(desk.runtime,"on_market_tick",wraps=desk.runtime.on_market_tick) as runtime_tick:
+                    tick(symbol,baseline,now[0]-timedelta(seconds=1))
+                    if day_index==4:
+                        tick("TESTC",101,now[0]-timedelta(seconds=1))
+                    runtime_tick.assert_not_called()
+                desk.cycle()
+                self.assertFalse(desk.armed)
+                tick(symbol,cross)
+                cutoff_state=desk.snapshot()
+                self.assertEqual(cutoff_state["orb_monitor"]["state"],"ENTRY_WINDOW_CLOSED")
+                self.assertEqual(len(broker.calls),before+1)
+                if day_index==4:
+                    dispositions={s["symbol"]:s["entry_status"] for s in cutoff_state["signals"]}
+                    self.assertEqual(dispositions,{"TESTA":"ENTRY_RECORDED","TESTC":"EXPIRED","TESTD":"RESEARCH_ONLY"})
+                    self.assertEqual({e["symbol"] for e in cutoff_state["orb_monitor"]["breakouts"]},{"TESTA"})
+
+                now[0]=day.replace(hour=15,minute=15)
+                desk.cycle()
+                desk.refresh_broker()
+                daily=desk.snapshot()
+                if day_index==1:
+                    stalled=dict(broker.orders[-1])
+                    self.assertEqual(cancelled,[stalled["nOrdNo"]])
+                    self.assertEqual([row["state"] for row in daily["intents"]],["CANCEL_PENDING"])
+                    self.assertEqual(len(broker.calls),before+1)
+                    session_summaries.append("stalled order carried")
+                else:
+                    self.assertEqual([row["state"] for row in daily["intents"]],["FILLED","FILLED"])
+                    self.assertEqual(len(daily["closed_trades"]),1)
+                    self.assertEqual(len(broker.calls),before+2)
+                    session_summaries.append("closed")
+
+            journal=client.get("/api/live/journal").json()
+            trades={(row["session_date"],row["symbol"]):row for row in journal["trades"]}
+            self.assertEqual(session_summaries,["closed","stalled order carried","closed","no signals","closed"])
+            self.assertEqual(len(candles),5)
+            self.assertEqual(len(broker.calls),7)
+            self.assertEqual(len(journal["fills"]),6)
+            self.assertEqual(journal["summary"]["closed_trade_count"],3)
+            self.assertEqual(journal["summary"]["open_trade_count"],0)
+            self.assertEqual(trades[("2026-11-03","TESTB")]["status"],"UNFILLED")
+            self.assertEqual(trades[("2026-11-02","TESTA")]["direction"],"LONG")
+            self.assertEqual(trades[("2026-11-06","TESTA")]["direction"],"SHORT")
+            self.assertNotIn(("2026-11-06","TESTC"),trades)
+            self.assertEqual(desk.snapshot()["prior_session_recovery_count"],0)
+            print(f"Five trading days: {session_summaries}; 7 submissions, 6 fills, 3 closed trades",flush=True)

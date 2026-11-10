@@ -1,5 +1,8 @@
 """Real-book P&L contracts: stale/missing prices and costs never become profit."""
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 from datetime import datetime,timedelta
 from live_desk.dhan_data import IST
 from live_desk.broker_view import positions,pnl_summary
@@ -68,6 +71,149 @@ class PnlSnapshotTests(unittest.TestCase):
         self.assertEqual(self.desk.snapshot()['pnl']['gross_total'],30)
         self.assertIsNone(self.desk.last_quote_at,'Valuation ticks must not unlock signal readiness')
         self.assertEqual(self.broker.order_calls,0)
+
+    def test_cutoff_stops_candle_and_trigger_work_but_keeps_open_position_pnl(self):
+        from unittest.mock import Mock
+
+        self.now=self.now.replace(minute=30)
+        desk=self.desk
+        desk.dhan_ids={"TESTA":"123","TESTB":"456"}
+        desk.dhan=Mock()
+        desk.refresh_broker()
+        desk.runtime=Mock()
+        desk.runtime.errors=[]
+        with patch.object(desk,"_observe_orb_crossing") as observe:
+            desk.on_tick({"symbol":"TESTA","ltp":105,"timestamp":self.now-timedelta(seconds=1)})
+            desk.on_tick({"symbol":"TESTB","ltp":105,"timestamp":self.now})
+            desk.runtime.on_market_tick.assert_not_called()
+            observe.assert_not_called()
+        desk.poll_ohlc()
+        desk.dhan.get_ohlc.assert_not_called()
+        state=desk.snapshot()
+        self.assertEqual(state["pnl"]["gross_total"],15)
+        self.assertNotIn("TESTB",state["quotes"])
+        self.assertIsNone(state["last_entry_quote_at"])
+        self.assertFalse(state["orb_monitor"]["order_submission_enabled"])
+
+    def test_late_packet_cannot_extend_execution_readiness(self):
+        self.desk.dhan_ids={'TESTA':'123','TESTB':'456'}
+        newest=self.now-timedelta(seconds=4)
+        self.desk.on_tick({'symbol':'TESTA','ltp':105,'timestamp':newest})
+        self.desk.on_tick({'symbol':'TESTB','ltp':106,'timestamp':newest-timedelta(seconds=2)})
+        state=self.desk.snapshot()
+        self.assertEqual(datetime.fromisoformat(state['last_entry_quote_at']),newest)
+        self.assertNotIn('FRESH_QUOTES',state['readiness_blockers'])
+        self.now+=timedelta(seconds=2)
+        self.assertIn('FRESH_QUOTES',self.desk.snapshot()['readiness_blockers'])
+        self.assertEqual(self.broker.order_calls,0)
+
+    def test_slow_dashboard_ledger_snapshot_does_not_hold_tick_lock(self):
+        self.desk.dhan_ids={"TESTA":"123"}
+        started,release=threading.Event(),threading.Event()
+        read=self.desk.ledger.snapshot
+
+        def slow_read(day):
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("Test did not release the dashboard query")
+            return read(day)
+
+        with patch.object(self.desk.ledger,"snapshot",side_effect=slow_read), ThreadPoolExecutor(2) as pool:
+            dashboard=pool.submit(self.desk.snapshot)
+            try:
+                self.assertTrue(started.wait(2))
+                tick=pool.submit(self.desk.on_tick,{"symbol":"TESTA","ltp":105,"timestamp":self.now})
+                tick.result(timeout=1)
+                self.assertEqual(self.desk.last_quote_at,self.now)
+            finally:
+                release.set()
+            dashboard.result(timeout=2)
+
+    def test_slow_or_unavailable_candle_does_not_hide_other_verified_ranges(self):
+        from unittest.mock import Mock
+
+        desk=self.desk
+        desk.session_date=NOW.date().isoformat()
+        desk.entry_watchlist=True
+        desk.dhan_ids={"TESTA":"123","TESTB":"456"}
+        desk.ticker=Mock()
+        released, published=threading.Event(),threading.Event()
+
+        class PublishedRanges(dict):
+            def __setitem__(self,symbol,bounds):
+                super().__setitem__(symbol,bounds)
+                if symbol=="TESTA":
+                    published.set()
+
+        desk.opening_ranges=PublishedRanges()
+
+        def candle(_dhan,security_id,_day,**_kwargs):
+            if security_id=="456":
+                if not released.wait(3):
+                    raise RuntimeError("Test did not release the slow candle")
+                raise ValueError("Dhan has not published this candle")
+            return 100,95
+
+        with patch("live_desk.supervisor.opening_range",side_effect=candle), ThreadPoolExecutor(1) as pool:
+            cycle=pool.submit(desk._build_runtime)
+            try:
+                self.assertTrue(published.wait(2))
+                self.assertEqual(desk.opening_ranges,{"TESTA":(100,95)})
+                self.assertIsNone(desk.runtime)
+            finally:
+                released.set()
+            cycle.result(timeout=2)
+        self.assertEqual(desk.status,"WAITING_FOR_OPENING_CANDLE")
+
+    def test_broker_books_overlap_independent_reads_and_keep_order_before_fills(self):
+        wave=threading.Barrier(3)
+        orders_observed=threading.Event()
+        original_positions=self.broker.positions
+        original_limits=self.broker.limits
+        original_orders=self.broker.order_report
+        original_trades=self.broker.trade_report
+
+        def positions():
+            wave.wait(timeout=2)
+            return original_positions()
+
+        def limits():
+            wave.wait(timeout=2)
+            return original_limits()
+
+        def orders():
+            wave.wait(timeout=2)
+            orders_observed.set()
+            return original_orders()
+
+        def trades():
+            self.assertTrue(orders_observed.is_set())
+            return original_trades()
+
+        with patch.multiple(self.broker,positions=positions,limits=limits,order_report=orders,trade_report=trades):
+            self.desk.refresh_broker()
+        self.assertTrue(self.desk.snapshot()["broker_connected"])
+        self.assertEqual(self.broker.order_calls,0)
+
+    def test_reconnected_feed_requires_fresh_baselines_and_rearming(self):
+        from unittest.mock import Mock
+
+        desk=self.desk
+        desk.dhan_ids={"TESTA":"123"}
+        desk.runtime=Mock()
+        desk.runtime.errors=[]
+        desk.ticker=Mock()
+        desk.ticker.snapshot.return_value={"state":"CONNECTED","connection_generation":1}
+        desk.on_tick({"symbol":"TESTA","ltp":100,"timestamp":self.now,"feed_generation":1})
+        desk.armed=True
+        desk._orb_previous["TESTA"]=100
+        desk.ticker.snapshot.return_value={"state":"CONNECTED","connection_generation":2}
+        self.assertIn("FRESH_QUOTES",desk.snapshot()["readiness_blockers"])
+        desk.on_tick({"symbol":"TESTA","ltp":101,"timestamp":self.now,"feed_generation":2})
+        self.assertFalse(desk.armed)
+        desk.runtime.reset_crossing_baselines.assert_called_once()
+        self.assertNotIn("TESTA",desk._orb_previous)
+        self.assertNotIn("FRESH_QUOTES",desk.snapshot()["readiness_blockers"])
 
     def test_snapshot_expires_quote_even_between_broker_refreshes(self):
         self.desk.quote_data={'TESTA':{'ltp':105,'tick_at':self.now.isoformat()}}

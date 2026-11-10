@@ -2,7 +2,7 @@
   "version": 1,
   "exchange_timezone": "Asia/Kolkata",
   "opening_candle_start": "09:15",
-  "entry_cutoff": "15:00",
+  "entry_cutoff": "09:30",
   "exit_time": "15:15",
   "max_long_positions": 5,
   "max_short_positions": 5,

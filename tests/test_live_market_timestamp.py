@@ -3,12 +3,17 @@
 Synthetic binary Dhan packets and explicitly fake broker/feed objects; no
 network access, credentials, or live order execution.
 """
+import json
 import struct
 import unittest
-from datetime import datetime, timedelta
-from unittest.mock import patch
+from datetime import datetime, time, timedelta
+from decimal import Decimal
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
+from live_desk.kotak_instruments import KotakInstrument
+from live_desk.runtime import LiveRuntime
+from live_desk.strategy import LivePolicy
 from live_desk.ticker import LiveTicker, parse_ticker
 
 IST=ZoneInfo("Asia/Kolkata")
@@ -27,6 +32,59 @@ class TickerExchangeTimestampTests(unittest.TestCase):
         self.assertEqual(result["security_id"],"1333")
         self.assertAlmostEqual(result["ltp"],101.25,places=3)
         self.assertEqual(datetime.fromisoformat(result["exchange_timestamp"]),trade)
+
+    def test_wire_float_does_not_invent_a_sub_paise_price(self):
+        trade=datetime(2026,11,4,9,16,tzinfo=IST)
+        self.assertEqual(parse_ticker(ticker_packet(price=100.10,last_trade_at=trade))["ltp"],100.10)
+
+    def test_subscription_added_while_connecting_is_sent_on_open(self):
+        ticker=LiveTicker(type("Dhan",(),{"websocket_url":lambda _:"wss://example.invalid"})(),
+                          {"HDFCBANK":"1333"},lambda _:None)
+        sent=[]
+        def fake_ws(_url,*,on_open,**_callbacks):
+            class Socket:
+                def send(self,message):
+                    sent.append(json.loads(message))
+                def run_forever(self,**_kwargs):
+                    ticker.add_symbols({"TCS":"11536"})
+                    if sent:
+                        raise AssertionError("Subscribe attempted before WebSocket opened")
+                    on_open(self)
+                    ticker.stop_event.set()
+            return Socket()
+        with patch("websocket.WebSocketApp",side_effect=fake_ws):
+            ticker._run()
+        self.assertEqual({item["SecurityId"] for item in sent[0]["InstrumentList"]},{"1333","11536"})
+
+    def test_socket_generation_changes_on_reconnect_and_invalidates_on_close(self):
+        trade=datetime(2026,11,4,9,16,tzinfo=IST)
+        received=[]
+        current=[]
+        ticker=LiveTicker(type("Dhan",(),{"websocket_url":lambda _:"wss://example.invalid"})(),
+                          {"HDFCBANK":"1333"},received.append)
+        opened=[]
+
+        def fake_ws(_url,*,on_open,on_message,on_close,**_callbacks):
+            class Socket:
+                def send(self,_message):pass
+                def run_forever(self,**_kwargs):
+                    on_open(self)
+                    generation=ticker.snapshot()["connection_generation"]
+                    opened.append(generation)
+                    current.append(ticker.connection_is_current(generation))
+                    on_message(self,ticker_packet(last_trade_at=trade))
+                    on_close(self,1006,"disconnect")
+                    current.append(ticker.connection_is_current(generation))
+                    if len(opened)==2:ticker.stop_event.set()
+            return Socket()
+
+        with patch("websocket.WebSocketApp",side_effect=fake_ws), \
+             patch.object(ticker.stop_event,"wait",return_value=False):
+            ticker._run()
+
+        self.assertEqual(opened,[1,2])
+        self.assertEqual([tick["feed_generation"] for tick in received],opened)
+        self.assertEqual(current,[True,False,True,False])
 
     def test_old_exchange_trade_not_relabelled_as_current_tick(self):
         trade=datetime(2026,11,4,9,16,0,tzinfo=IST)
@@ -50,6 +108,30 @@ class TickerExchangeTimestampTests(unittest.TestCase):
         self.assertGreater(received[0]["received_at"],trade)
         self.assertEqual(ticker.snapshot()["last_exchange_trade_at"],trade.isoformat())
 
+    def test_first_tick_after_stale_baseline_does_not_count_as_crossing(self):
+        now=[datetime(2026,11,4,9,17,tzinfo=IST)]
+        ledger=Mock()
+        ledger.reserve_entry.return_value=None
+        runtime=LiveRuntime(session_date=now[0].date(),signals=[{"symbol":"TCS","side":"LONG"}],
+            dhan_ids={"TCS":"11536"},kotak_instruments={"TCS":KotakInstrument("TCS","TCS-EQ","11536")},
+            opening_ranges={"TCS":(Decimal("100"),Decimal("95"))},
+            policy=LivePolicy(time(9,30),time(15,15),1,1,2,Decimal("10000"),Decimal("20000"),"end"),
+            ledger=ledger,broker=Mock(),enabled=True,clock=lambda:now[0])
+        self.addCleanup(runtime.close)
+
+        def tick(price):
+            return runtime.on_tick({"symbol":"TCS","ltp":price,"timestamp":now[0]})
+
+        self.assertIsNone(tick("100"))
+        now[0]+=timedelta(seconds=6)
+        self.assertIsNone(tick("101"))
+        self.assertIsNone(tick("102"))
+        self.assertIsNone(tick("100"))
+        now[0]+=timedelta(seconds=1)
+        self.assertIsNotNone(tick("101"))
+        self.assertTrue(runtime.wait_for_submissions())
+        ledger.reserve_entry.assert_called_once()
+
     def test_corrupt_or_wrong_response_packet_rejected(self):
         trade=datetime(2026,11,4,9,16,0,tzinfo=IST)
         packet=ticker_packet(last_trade_at=trade)
@@ -57,6 +139,39 @@ class TickerExchangeTimestampTests(unittest.TestCase):
         self.assertIsNone(parse_ticker(packet[:15]))
         self.assertIsNone(parse_ticker(bytes([4])+packet[1:]))
         self.assertIsNone(parse_ticker(ticker_packet(price=float("nan"),last_trade_at=trade)))
+
+    def test_bundled_message_routes_every_tick_and_applies_configured_offset(self):
+        trade = datetime(2026, 11, 4, 9, 16, tzinfo=IST)
+        encoded_time = trade + timedelta(hours=5, minutes=30)
+        first = ticker_packet(security_id=1333, last_trade_at=encoded_time)
+        prev_close = bytes([6]) + first[1:]
+        second = ticker_packet(security_id=11536, last_trade_at=encoded_time + timedelta(seconds=1))
+        received = []
+
+        with patch.dict("os.environ", {"DHAN_TICK_TIMESTAMP_OFFSET_SECONDS": "19800"}):
+            ticker = LiveTicker(type("Dhan", (), {"websocket_url": lambda _: "wss://example.invalid"})(),
+                                {"HDFCBANK": "1333", "TCS": "11536"}, received.append)
+
+        def fake_ws(url, *, on_message, **callbacks):
+            class Socket:
+                def run_forever(self, **kwargs):
+                    on_message(self, prev_close + first + second)
+                    ticker.stop_event.set()
+            return Socket()
+
+        with patch("websocket.WebSocketApp", side_effect=fake_ws):
+            ticker._run()
+
+        self.assertEqual([(tick["symbol"], tick["timestamp"]) for tick in received],
+                         [("HDFCBANK", trade), ("TCS", trade + timedelta(seconds=1))])
+
+    def test_conflicting_id_cannot_replace_existing_subscription(self):
+        with self.assertRaisesRegex(ValueError, "share a Dhan security ID"):
+            LiveTicker(None, {"HDFCBANK": "1333", "TCS": "1333"}, lambda _: None)
+        ticker = LiveTicker(None, {"HDFCBANK": "1333"}, lambda _: None)
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            ticker.add_symbols({"TCS": "1333"})
+        self.assertEqual(ticker.map, {"1333": "HDFCBANK"})
 
 
 if __name__=="__main__":

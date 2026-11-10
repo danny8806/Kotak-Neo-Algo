@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import threading
 import time as wall_time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, Future, wait
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from itertools import repeat
 
 from live_desk.dhan_data import IST
+from live_desk.kotak_auth import KotakEntryNotSent, KotakSession
 from live_desk.kotak_gateway import cancel_kotak_order, place_kotak_order, reconcile_kotak_tag
 from live_desk.kotak_instruments import KotakInstrument
+from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
 from live_desk.strategy import LivePolicy, candidate_entry
+
+
+MAX_ENTRY_TICK_AGE = timedelta(seconds=5)
 
 
 class LiveRuntime:
@@ -25,7 +32,7 @@ class LiveRuntime:
                  dhan_ids: dict[str, str], kotak_instruments: dict[str, KotakInstrument],
                  opening_ranges: dict[str, tuple[Decimal, Decimal]],
                  policy: LivePolicy, ledger: LiveLedger, broker,
-                 enabled: bool, clock=None, close_only: bool = False):
+                 enabled: bool, clock=None, close_only: bool = False, feed_is_current=None):
         symbols = {row["symbol"] for row in signals}
         if (not symbols or len(symbols) != len(signals) or
             symbols != set(dhan_ids) or symbols != set(kotak_instruments) or
@@ -51,12 +58,16 @@ class LiveRuntime:
         self.lock = threading.RLock()
         self._enabled = enabled
         self.close_only = close_only
+        self.feed_is_current = feed_is_current
         self.clock = clock or (lambda: datetime.now(IST))
         self.previous: dict[str, Decimal] = {}
         self.last_tick_at: dict[str, datetime] = {}
         self._errors: dict[str,str] = {}
         self.submissions = ThreadPoolExecutor(max_workers=20, thread_name_prefix="kotak-order")
         self.pending: set[Future] = set()
+        self.pending_entries: set[str] = set()
+        self.reserved_symbols: set[str] = set()
+        self.entry_dispatch_ms = deque(maxlen=100)
 
     def extend_signals(self, *, signals: list[dict], dhan_ids: dict[str, str],
                        kotak_instruments: dict[str, KotakInstrument],
@@ -105,6 +116,11 @@ class LiveRuntime:
     def _clear_error(self,key):
         with self.lock:self._errors.pop(key,None)
 
+    def reset_crossing_baselines(self):
+        with self.lock:
+            self.previous.clear()
+            self.last_tick_at.clear()
+
     def on_tick(self, tick: dict) -> dict | None:
         """Process a real Dhan ticker packet after receipt; never infer a fill."""
         symbol = tick.get("symbol")
@@ -113,15 +129,20 @@ class LiveRuntime:
         at = tick.get("timestamp")
         if not isinstance(at, datetime) or at.tzinfo is None or at.utcoffset() is None:
             return None
-        local = at.astimezone(IST)
-        if local.date() != self.session_date or local.time() < time(9, 16):
-            return None
-        age = self.clock().astimezone(IST) - local
-        if age < timedelta(seconds=-2) or age > timedelta(seconds=5):
-            return None
         try:price = Decimal(str(tick.get("ltp")))
         except (ValueError,TypeError,ArithmeticError):return None
         if not price.is_finite() or price <= 0:
+            return None
+        return self.on_market_tick(symbol,price,at,self.clock(),tick.get("received_ns"),tick.get("feed_generation"))
+
+    def on_market_tick(self, symbol, price, at, now, received_ns=None, feed_generation=None):
+        """Process a supervisor-validated price with no second parsing pass."""
+        local=at.astimezone(IST)
+        if (local.date()!=self.session_date or not time(9,16)<=local.time()<self.policy.entry_cutoff
+                or now.astimezone(IST).time()>=self.policy.entry_cutoff):
+            return None
+        age=now-local
+        if age<timedelta(seconds=-2) or age>MAX_ENTRY_TICK_AGE:
             return None
         with self.lock:
             prior_time = self.last_tick_at.get(symbol)
@@ -130,38 +151,46 @@ class LiveRuntime:
             previous = self.previous.get(symbol)
             self.previous[symbol] = price
             self.last_tick_at[symbol] = at
-            if not self.enabled or self.close_only or previous is None:
+            if (not self._enabled or self.close_only or previous is None or prior_time is None
+                    or now-prior_time>MAX_ENTRY_TICK_AGE):
+                return None
+            if symbol in self.pending_entries or symbol in self.reserved_symbols:
                 return None
             side = self.signals[symbol]["side"]
-            rows = self.ledger.snapshot(self.session_date)
-            entries = [row for row in rows if row["phase"] == "ENTRY"]
-            long_count = sum(row["side"] == "BUY" for row in entries)
-            short_count = sum(row["side"] == "SELL" for row in entries)
-            reserved = sum(Decimal(row["reserved_notional"]) for row in entries)
             high, low = self.opening_ranges[symbol]
             quantity = candidate_entry(
                 side=side, previous_price=previous, price=price,
                 orb_high=high, orb_low=low, tick_at=at, policy=self.policy,
-                open_long=long_count, open_short=short_count, reserved_gross=reserved,
-                open_positions=len(entries))
+            )
             if quantity is None:
                 return None
             direction = "BUY" if side == "LONG" else "SELL"
-            intent = self.ledger.reserve_entry(
-                session_date=self.session_date, symbol=symbol, side=direction,
-                quantity=quantity, reference_price=price, at=at,
-                max_per_side=self.policy.max_long if side == "LONG" else self.policy.max_short,
-                gross_cap=self.policy.gross_cap, max_total=self.policy.max_positions)
-            if intent is None:
-                return None
-            future = self.submissions.submit(self._submit_and_reconcile, intent, at)
+            started=received_ns if received_ns is not None else wall_time.perf_counter_ns()
+            future = self.submissions.submit(
+                self._reserve_and_submit,symbol,direction,quantity,price,at,started,feed_generation)
+            self.pending_entries.add(symbol)
             self.pending.add(future)
-            future.add_done_callback(self._submission_done)
-            return {"tag": intent["tag"], "state": "SUBMISSION_QUEUED"}
+            future.add_done_callback(lambda done: self._submission_done(done, symbol))
+            return {"symbol": symbol, "state": "SUBMISSION_QUEUED"}
 
-    def _submission_done(self, future: Future) -> None:
+    def _reserve_and_submit(self, symbol, direction, quantity, price, at, received_ns, feed_generation):
+        if not self._entry_may_send(at,feed_generation):
+            return
+        # PostgreSQL still owns deduplication and every exposure limit.
+        intent = self.ledger.reserve_entry(
+            session_date=self.session_date, symbol=symbol, side=direction,
+            quantity=quantity, reference_price=price, at=at,
+            max_per_side=self.policy.max_long if direction == "BUY" else self.policy.max_short,
+            gross_cap=self.policy.gross_cap, max_total=self.policy.max_positions)
+        if intent:
+            with self.lock:self.reserved_symbols.add(symbol)
+            self._submit_and_reconcile(intent,at,received_ns=received_ns,feed_generation=feed_generation)
+
+    def _submission_done(self, future: Future, symbol: str | None = None) -> None:
         with self.lock:
             self.pending.discard(future)
+            if symbol is not None:
+                self.pending_entries.discard(symbol)
         if not future.cancelled() and future.exception() is not None:
             self._error("SUBMISSION_WORKER","Submission worker failed; durable intent requires review")
 
@@ -174,24 +203,54 @@ class LiveRuntime:
         _, unfinished = wait(pending, timeout=timeout)
         return not unfinished
 
-    def _submit_and_reconcile(self, intent: dict, at: datetime) -> dict:
+    def _entry_may_send(self, at: datetime, feed_generation=None) -> bool:
+        now = self.clock().astimezone(IST)
+        return (self.enabled and not self.close_only and now.date() == self.session_date
+                and time(9,16) <= now.time() < self.policy.entry_cutoff
+                and timedelta(seconds=-2) <= now - at.astimezone(IST) <= MAX_ENTRY_TICK_AGE
+                and (self.feed_is_current is None or self.feed_is_current(feed_generation)))
+
+    def _submit_and_reconcile(self, intent: dict, at: datetime, *, received_ns=None,
+                              feed_generation=None) -> dict:
         tag = intent["tag"]
-        with self.lock:
-            now=self.clock().astimezone(IST)
-            if intent.get("phase","ENTRY")=="ENTRY" and (
-                    not self.enabled or self.close_only or now.date()!=self.session_date or
-                    now.time()>=self.policy.entry_cutoff or now-at.astimezone(IST)>timedelta(seconds=5)):
-                self.ledger.mark_not_submitted(tag,now)
-                return {"tag":tag,"state":"ABORTED"}
-            # This durable transition is the commit point before network I/O.
-            self.ledger.mark_submission_unknown(tag, now)
+        is_entry = intent.get("phase", "ENTRY") == "ENTRY"
+        if is_entry and not self._entry_may_send(at,feed_generation):
+            self.ledger.mark_not_submitted(tag, self.clock())
+            return {"tag": tag, "state": "ABORTED"}
+        # Persist before network I/O, without holding the tick reader's lock.
+        self.ledger.mark_submission_unknown(tag, self.clock())
+        if is_entry and not self._entry_may_send(at,feed_generation):
+            self.ledger.mark_not_submitted(tag, self.clock(), committed_for_send=True)
+            return {"tag": tag, "state": "ABORTED"}
         result=None
+        dispatch_ns=None
+
+        def before_send():
+            nonlocal dispatch_ns
+            if not self._entry_may_send(at,feed_generation):
+                return False
+            dispatch_ns=wall_time.perf_counter_ns()
+            return True
+
         try:
+            guard={}
+            if is_entry and isinstance(self.broker,KotakSession):
+                guard["before_send"]=before_send
+            elif is_entry:
+                if not before_send():
+                    raise KotakEntryNotSent("Entry expired before dispatch")
             result = place_kotak_order(self.broker, self.kotak_instruments[intent["symbol"]],
-                                       intent["side"], intent["quantity"], tag)
+                                       intent["side"], intent["quantity"], tag, **guard)
+        except KotakEntryNotSent:
+            self.ledger.mark_not_submitted(tag, self.clock(), committed_for_send=True)
+            return {"tag": tag, "state": "ABORTED"}
         except Exception as exc:
             # Even a timeout can follow broker acceptance. Only retry READS.
             self._error(tag,f"{intent['symbol']}: {type(exc).__name__}; reconcile tag {tag}")
+        finally:
+            if dispatch_ns is not None and received_ns is not None:
+                elapsed=(dispatch_ns-received_ns)/1_000_000
+                with self.lock:self.entry_dispatch_ms.append(elapsed)
         for attempt in range(3):
             if attempt:wall_time.sleep(.05*attempt)
             try:
@@ -203,45 +262,78 @@ class LiveRuntime:
                 self._error(tag,f"{intent['symbol']}: {type(exc).__name__}; reconcile tag {tag}")
         return {"tag": tag, "state": "SUBMISSION_UNKNOWN"}
 
-    def reconcile_pending(self, at: datetime) -> None:
+    def dispatch_latency(self):
+        with self.lock: samples=sorted(self.entry_dispatch_ms)
+        if not samples:
+            return {"samples":0,"p50_ms":None,"p95_ms":None,"max_ms":None}
+        def percentile(percent):
+            return round(samples[(len(samples)*percent+99)//100-1],3)
+        return {"samples":len(samples),"p50_ms":percentile(50),"p95_ms":percentile(95),
+                "max_ms":round(samples[-1],3)}
+
+    def reconcile_pending(self, at: datetime, *, books=None, observed_at=None) -> None:
         with self.lock:
             if self.pending:
                 return
-        for row in self.ledger.snapshot(self.session_date):
-            if row["state"] in {"SUBMISSION_UNKNOWN", "ACKNOWLEDGED", "PARTIAL", "CANCEL_PENDING"}:
-                try:
+        pending = [
+            row for row in self.ledger.snapshot(self.session_date)
+            if row["state"] in {"SUBMISSION_UNKNOWN", "ACKNOWLEDGED", "PARTIAL", "CANCEL_PENDING"}
+            and (observed_at is None or row["updated_at"] <= observed_at)
+        ]
+        if books is None and len(pending) > 1:
+            try:
+                books = (book_rows(self.broker.order_report(), "orders"),
+                         book_rows(self.broker.trade_report(), "trades"))
+            except Exception:
+                for row in pending:
+                    self._error(row["tag"], f"{row['symbol']}: broker reconciliation pending")
+                return
+        for row in pending:
+            try:
+                if books is None:
                     report = reconcile_kotak_tag(self.broker, row["tag"])
-                    self.ledger.apply_broker_report(report, at)
-                    self._clear_error(row["tag"])
-                except Exception:
-                    self._error(row["tag"],f"{row['symbol']}: broker reconciliation pending")
+                else:
+                    report = reconcile_kotak_tag(self.broker, row["tag"], books=books)
+                self.ledger.apply_broker_report(report, at)
+                self._clear_error(row["tag"])
+            except Exception:
+                self._error(row["tag"], f"{row['symbol']}: broker reconciliation pending")
 
-    def exit_due(self, at: datetime) -> list[dict]:
+    def exit_due(self, at: datetime, *, read_positions=None) -> list[dict]:
         if at.astimezone(IST).date() != self.session_date or at.astimezone(IST).time() < self.policy.exit_time:
             return []
-        if not self.wait_for_submissions(timeout=30.0):
-            self._error("EOD_PENDING","EOD exit blocked: Kotak submissions still in flight")
-            return []
-        self._clear_error("EOD_PENDING")
+        self.enabled = False
+        # Each symbol must have a terminal entry and exact broker quantity.
+        # An in-flight order on another symbol cannot delay a confirmed exit.
         self.reconcile_pending(at)
-        # Cancel any still-open entry order once, then require a terminal broker
-        # report before closing its actually filled quantity.
-        for row in self.ledger.snapshot(self.session_date):
-            if row["phase"] != "ENTRY" or row["state"] not in {"ACKNOWLEDGED", "PARTIAL"}:
+        self.cancel_working_entries(at)
+        rows = self.ledger.snapshot(self.session_date)
+        exits = {row["symbol"]: row for row in rows if row["phase"] == "EXIT"}
+        candidates = []
+        for entry in rows:
+            if entry["phase"] != "ENTRY" or entry["state"] not in {"FILLED", "PARTIAL_CANCELLED"}:
                 continue
-            if not row.get("broker_order_id"):
-                self._error(row["tag"],f'{row["symbol"]}: missing order ID; EOD exit blocked')
+            symbol = entry["symbol"]
+            prior = exits.get(symbol)
+            if prior:
+                if prior["state"] in {"REJECTED", "PARTIAL_CANCELLED"} and prior["filled_quantity"] < entry["filled_quantity"]:
+                    self._error(f"EOD:{symbol}", f"{symbol}: exit ended with shares remaining. Manual action required.")
                 continue
-            try:
-                self.ledger.mark_cancel_pending(row["tag"], at)
-                cancel_kotak_order(self.broker, row["broker_order_id"])
-                report = reconcile_kotak_tag(self.broker, row["tag"])
-                self.ledger.apply_broker_report(report, at)
-            except Exception as exc:
-                self._error(row["tag"],f'{row["symbol"]}: entry cancellation/reconciliation pending ({type(exc).__name__})')
+            if entry["filled_quantity"] > 0 and symbol in self.signals:
+                candidates.append(entry)
+        # Read positions after cancellations so late entry fills are included.
+        positions = read_positions() if candidates and read_positions is not None else None
         futures = []
         with self.lock:
-            for symbol in self.signals:
+            for entry in candidates:
+                symbol = entry["symbol"]
+                if positions is not None:
+                    matches = [row for row in positions if row["symbol"] == symbol and row["product"] == "MIS"]
+                    expected = entry["filled_quantity"] if entry["side"] == "BUY" else -entry["filled_quantity"]
+                    if len(matches) != 1 or matches[0]["net_quantity"] != expected:
+                        self._error(f"EOD:{symbol}", f"{symbol}: Kotak MIS quantity does not match bot fills. Manual action required.")
+                        continue
+                    self._clear_error(f"EOD:{symbol}")
                 intent = self.ledger.reserve_exit(session_date=self.session_date, symbol=symbol, at=at)
                 if intent:
                     future = self.submissions.submit(self._submit_and_reconcile, intent, at)
@@ -261,6 +353,32 @@ class LiveRuntime:
             except Exception:
                 results.append({"state":"SUBMISSION_UNKNOWN"})
         return results
+
+    def cancel_working_entries(self, at: datetime) -> None:
+        local = at.astimezone(IST)
+        if local.date() != self.session_date or local.time() < self.policy.entry_cutoff:
+            return
+        self.enabled = False
+        # A durable transition prevents a second cancellation after a timeout.
+        working_entries = [
+            row for row in self.ledger.snapshot(self.session_date)
+            if row["phase"] == "ENTRY" and row["state"] in {"ACKNOWLEDGED", "PARTIAL"}
+        ]
+        if working_entries:
+            list(self.submissions.map(self._cancel_entry, working_entries, repeat(at)))
+
+    def _cancel_entry(self, row: dict, at: datetime) -> None:
+        tag = row["tag"]
+        if not row.get("broker_order_id"):
+            self._error(tag, f'{row["symbol"]}: missing order ID; EOD exit blocked')
+            return
+        try:
+            self.ledger.mark_cancel_pending(tag, at)
+            cancel_kotak_order(self.broker, row["broker_order_id"])
+            report = reconcile_kotak_tag(self.broker, tag)
+            self.ledger.apply_broker_report(report, at)
+        except Exception as exc:
+            self._error(tag, f'{row["symbol"]}: entry cancellation/reconciliation pending ({type(exc).__name__})')
 
     def close(self) -> None:
         with self.lock:self.enabled=False

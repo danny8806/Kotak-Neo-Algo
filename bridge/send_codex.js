@@ -8,6 +8,8 @@ const crypto = require("node:crypto");
 const root = path.resolve(__dirname, "..");
 const envPath = path.join(root, ".env");
 const reportPath = process.argv[2];
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [750, 1500];
 
 function fail(message) {
   process.stderr.write(`NOT DELIVERED: ${message}\n`);
@@ -32,6 +34,53 @@ function canonicalize(value) {
     return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
   }
   return value;
+}
+
+function retryDelay(response, attempt) {
+  const retryAfter = response?.headers?.get?.("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 5000);
+    const dateDelay = Date.parse(retryAfter) - Date.now();
+    if (Number.isFinite(dateDelay) && dateDelay > 0) return Math.min(dateDelay, 5000);
+  }
+  return RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)];
+}
+
+function transientStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function safeNetworkReason(error) {
+  const code = error?.cause?.code;
+  return typeof code === "string" && /^[A-Z0-9_]+$/.test(code)
+    ? `${error.name || "network error"}, ${code}`
+    : (error?.name || "network error");
+}
+
+async function requestWithRetry(url, options, {
+  fetchImpl = fetch,
+  attempts = MAX_ATTEMPTS,
+  timeoutMs = 15_000,
+  wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) {
+        throw new Error(`bridge request failed after ${attempts} attempts (${safeNetworkReason(error)})`);
+      }
+      await wait(RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]);
+      continue;
+    }
+    if (!transientStatus(response.status) || attempt === attempts) return response;
+    await wait(retryDelay(response, attempt));
+  }
+  throw new Error(`bridge request failed (${safeNetworkReason(lastError)})`);
 }
 
 async function main() {
@@ -60,7 +109,7 @@ async function main() {
 
   let response;
   try {
-    response = await fetch(url, {
+    response = await requestWithRetry(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -69,10 +118,9 @@ async function main() {
         "Idempotency-Key": `codex-${report.session_date}-${digest.slice(0, 24)}`,
       },
       body: raw,
-      signal: AbortSignal.timeout(15_000),
     });
   } catch (error) {
-    fail(`bridge request failed (${error.name || "network error"})`);
+    fail(error.message || `bridge request failed (${error.name || "network error"})`);
   }
   let acknowledgement;
   try { acknowledgement = await response.json(); }
@@ -86,4 +134,8 @@ async function main() {
   process.stdout.write(`${acknowledgement.status} ${acknowledgement.session_date} ${acknowledgement.sha256}\n`);
 }
 
-main().catch((error) => fail(error.name || "sender error"));
+if (require.main === module) {
+  main().catch((error) => fail(error.message || error.name || "sender error"));
+}
+
+module.exports = { requestWithRetry, transientStatus, safeNetworkReason };

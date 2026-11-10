@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 import uuid
+import hashlib
+import json
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -11,6 +13,7 @@ from sqlalchemy import (BigInteger, CheckConstraint, Column, Date, DateTime,
                         ForeignKey, Index, Integer, MetaData, Numeric, String, Table,
                         UniqueConstraint, create_engine, select, text, update)
 from sqlalchemy.engine import Engine
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 
 metadata = MetaData()
@@ -38,6 +41,21 @@ intents = Table(
     UniqueConstraint("session_date", "symbol", "phase", name="uq_live_intent_session_symbol_phase"),
 )
 Index("ix_live_intents_session_phase", intents.c.session_date, intents.c.phase)
+broker_fills = Table(
+    "live_broker_fills", metadata,
+    Column("fill_key", String(64), primary_key=True),
+    Column("broker_fill_id", String(128), nullable=False, server_default=""),
+    Column("broker_order_id", String(128), nullable=False, server_default=""),
+    Column("session_date", Date, nullable=False),
+    Column("symbol", String(32), nullable=False),
+    Column("trading_symbol", String(48), nullable=False),
+    Column("side", String(16), nullable=False, server_default=""),
+    Column("quantity", Integer, nullable=False),
+    Column("price", Numeric(24, 8), nullable=False),
+    Column("broker_time", String(64), nullable=False, server_default=""),
+    Column("first_seen_at", DateTime(timezone=True), nullable=False),
+)
+Index("ix_live_broker_fills_session", broker_fills.c.session_date, broker_fills.c.first_seen_at)
 events = Table(
     "live_order_intent_events", metadata,
     Column("id", BigInteger, primary_key=True, autoincrement=True),
@@ -92,16 +110,12 @@ class LiveLedger:
         notional = reference_price * quantity
         if notional > gross_cap:
             return None
-        with self.lock, self.engine.begin() as db:
+        with self.engine.begin() as db:
             self._lock_session(db, day)
-            existing = db.execute(select(intents.c.id).where(
-                intents.c.session_date == day, intents.c.symbol == symbol,
-                intents.c.phase == "ENTRY")).first()
-            if existing:
-                return None
-            rows = db.execute(select(intents.c.side, intents.c.reserved_notional).where(
+            rows = db.execute(select(intents.c.symbol, intents.c.side, intents.c.reserved_notional).where(
                 intents.c.session_date == day, intents.c.phase == "ENTRY")).mappings().all()
-            if (len(rows) >= max_total or sum(row["side"] == side for row in rows) >= max_per_side or
+            if (any(row["symbol"] == symbol for row in rows) or
+                    len(rows) >= max_total or sum(row["side"] == side for row in rows) >= max_per_side or
                     sum(Decimal(row["reserved_notional"]) for row in rows) + notional > gross_cap):
                 return None
             tag, stamp = uuid.uuid4().hex, at
@@ -135,7 +149,7 @@ class LiveLedger:
             return {"tag": tag, "symbol": symbol, "phase":"EXIT", "side": side, "quantity": qty}
 
     def mark_submission_unknown(self, tag: str, at: datetime) -> None:
-        with self.lock, self.engine.begin() as db:
+        with self.engine.begin() as db:
             row = db.execute(select(intents.c.state).where(intents.c.tag == tag).with_for_update()).first()
             if not row or row.state != "RESERVED":
                 raise ValueError("Intent already submitted or unknown")
@@ -155,11 +169,12 @@ class LiveLedger:
                 state="CANCEL_PENDING", updated_at=stamp))
             self._event(db, tag, "CANCEL_PENDING", "One broker cancellation attempt is in progress", stamp)
 
-    def mark_not_submitted(self, tag: str, at: datetime) -> None:
+    def mark_not_submitted(self, tag: str, at: datetime, *, committed_for_send: bool = False) -> None:
         """An entry lost authorization/freshness while queued; no broker call was made."""
         with self.lock, self.engine.begin() as db:
             row=db.execute(select(intents.c.state).where(intents.c.tag==tag).with_for_update()).first()
-            if not row or row.state!="RESERVED":
+            expected = "SUBMISSION_UNKNOWN" if committed_for_send else "RESERVED"
+            if not row or row.state != expected:
                 raise ValueError("Only an unsent reservation can be aborted")
             db.execute(update(intents).where(intents.c.tag==tag).values(state="ABORTED",updated_at=at))
             self._event(db,tag,"ABORTED","Unsent entry no longer authorized or fresh",at)
@@ -193,7 +208,67 @@ class LiveLedger:
                 broker_order_id=report["broker_order_id"], filled_quantity=filled,
                 average_fill_price=average, updated_at=stamp))
             if filled != row["filled_quantity"] or state != row["state"]:
-                self._event(db, tag, state, "Kotak report reconciled", stamp)
+                details = (f"Kotak {str(report['status']).upper()}; filled {filled}/{row['quantity']}; "
+                           f"average {average if average is not None else 'unavailable'}; "
+                           f"order {report['broker_order_id']}")
+                self._event(db, tag, state, details, stamp)
+
+    def record_broker_fills(self, rows: list[dict], observed_at: datetime) -> int:
+        """Persist real Kotak fills idempotently; repeated book refreshes add no duplicates."""
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise ValueError("Fill observation time must include timezone")
+        normalized = []
+        occurrences: dict[str, int] = {}
+        for item in rows:
+            symbol = str(item.get("symbol") or "").strip().upper()
+            trading_symbol = str(item.get("trading_symbol") or "").strip().upper()
+            if not symbol or trading_symbol != f"{symbol}-EQ":
+                continue
+            try:
+                quantity = int(item.get("filled_quantity"))
+                price = Decimal(str(item.get("fill_price")))
+            except (ValueError, TypeError, ArithmeticError):
+                continue
+            if quantity <= 0 or not price.is_finite() or price <= 0:
+                continue
+            record = {
+                "broker_fill_id": str(item.get("fill_id") or "").strip(),
+                "broker_order_id": str(item.get("broker_order_id") or "").strip(),
+                "session_date": observed_at.date(),
+                "symbol": symbol,
+                "trading_symbol": trading_symbol,
+                "side": str(item.get("side") or "").strip().upper(),
+                "quantity": quantity,
+                "price": price,
+                "broker_time": str(item.get("fill_time") or "").strip(),
+            }
+            identity = {key: str(value) for key, value in record.items()}
+            fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            occurrences[fingerprint] = occurrences.get(fingerprint, 0) + 1
+            fill_key = hashlib.sha256(f"{fingerprint}:{occurrences[fingerprint]}".encode()).hexdigest()
+            normalized.append({"fill_key": fill_key, **record, "first_seen_at": observed_at})
+        if not normalized:
+            return 0
+        with self.lock, self.engine.begin() as db:
+            inserted = db.execute(pg_insert(broker_fills).values(normalized).on_conflict_do_nothing(
+                index_elements=[broker_fills.c.fill_key]).returning(broker_fills.c.fill_key))
+            return len(inserted.scalars().all())
+
+    def journal_snapshot(self, limit: int = 1000) -> dict:
+        """Return durable order lifecycle events, broker fills, and source intents."""
+        bounded = min(max(int(limit), 1), 5000)
+        with self.engine.connect() as db:
+            intent_rows = db.execute(select(intents).order_by(
+                intents.c.session_date.desc(), intents.c.id.desc()).limit(bounded)).mappings().all()
+            tags = [row["tag"] for row in intent_rows]
+            event_rows = (db.execute(select(events).where(events.c.tag.in_(tags)).order_by(
+                events.c.observed_at.desc(), events.c.id.desc()).limit(bounded * 5)).mappings().all()
+                if tags else [])
+            fill_rows = db.execute(select(broker_fills).order_by(
+                broker_fills.c.first_seen_at.desc(), broker_fills.c.fill_key.desc()).limit(bounded)).mappings().all()
+        return {"intents": [dict(row) for row in intent_rows],
+                "events": [dict(row) for row in event_rows],
+                "fills": [dict(row) for row in fill_rows]}
 
     def snapshot(self, session_date: date) -> list[dict]:
         with self.engine.connect() as db:

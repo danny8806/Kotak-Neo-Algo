@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 import requests
+from live_desk.rate_limit import SlidingWindowLimiter
 
 IST = ZoneInfo("Asia/Kolkata")
 AUTH_ROOT = "https://auth.dhan.co"
@@ -32,9 +33,10 @@ class DhanDataClient:
         self.token_expiry=None
         self.lock=threading.RLock()
         self.quote_lock=threading.Lock()
-        self.history_lock=threading.Lock()
+        self.history_limiter=SlidingWindowLimiter(5,period=1.05)
+        self.history_connections=threading.local()
+        self._provided_session=session
         self._quote_last=0.0
-        self._history_last=0.0
 
     @classmethod
     def from_environment(cls):
@@ -76,12 +78,12 @@ class DhanDataClient:
             if rejected_token is None or self.token==rejected_token:
                 self.token="";self.token_created_at=None;self.token_expiry=None
 
-    def _request(self,method:str,url:str,*,json_body=None):
+    def _request(self,method:str,url:str,*,json_body=None,session=None,timeout=25):
         with self.lock:token=self.token
         if not token:raise RuntimeError("Dhan token unavailable")
-        response=self.session.request(method,url,headers={
+        response=(session if session is not None else self.session).request(method,url,headers={
             "access-token":token,"client-id":self.client_id,
-            "Accept":"application/json"},json=json_body,timeout=25)
+            "Accept":"application/json"},json=json_body,timeout=timeout)
         if response.status_code in (401,403):
             self.invalidate_token(token)
             raise RuntimeError("Dhan token expired or denied")
@@ -124,15 +126,17 @@ class DhanDataClient:
         if interval not in {"1","5","15","25","60"}:raise ValueError("Unsupported candle interval")
         if start.utcoffset() is None or end.utcoffset() is None or end<=start:
             raise ValueError("Invalid candle request")
-        with self.history_lock:
-            delay=.22-(time.monotonic()-self._history_last)
-            if delay>0:time.sleep(delay)
-            self._history_last=time.monotonic()
-            data=self._request("POST",API_ROOT+"/charts/intraday",json_body={
-                "securityId":str(security_id),"exchangeSegment":exchange_segment,
-                "instrument":instrument,"interval":interval,"oi":False,
-                "fromDate":start.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
-                "toDate":end.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")})
+        session=self._provided_session
+        if session is None:
+            if not hasattr(self.history_connections,"session"):
+                self.history_connections.session=requests.Session()
+            session=self.history_connections.session
+        self.history_limiter.acquire()
+        data=self._request("POST",API_ROOT+"/charts/intraday",session=session,timeout=(3,5),json_body={
+            "securityId":str(security_id),"exchangeSegment":exchange_segment,
+            "instrument":instrument,"interval":interval,"oi":False,
+            "fromDate":start.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "toDate":end.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")})
         keys=("timestamp","open","high","low","close")
         if any(not isinstance(data.get(k),list) for k in keys):
             raise RuntimeError("Dhan returned incomplete candles")
