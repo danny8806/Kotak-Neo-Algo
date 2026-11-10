@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "status": "READY",
+  "market": "NSE",
+  "timezone": "Asia/Kolkata",
+  "session_date": "2026-11-07",
+  "news_cutoff_at": "2026-11-07T16:16:41.662652+05:30",
+  "generated_at": "2026-11-07T16:16:41.662652+05:30",
+  "execution_enabled": false,
+  "signals": [
+    {
+      "symbol": "DIVISLAB",
+      "side": "LONG",
+      "rank": 1,
+      "news_summary": "Q2FY27 revenue Rs 3,676 crore, up 35.4% YoY; PAT Rs 1,127 crore, up 63.6%.",
+      "reason": "Strong simultaneous revenue and profit growth supports the highest-ranked LONG among these supplied verified leads.",
+      "first_available_at": "2026-11-07T13:08:00+05:30",
+      "sources": [
+        {
+          "url": "https://www.ndtvprofit.com/markets/divis-laboratories-q2-results-net-profit-jumps-64-to-rs-1-127-crore-revenue-rises-35-margins-expand-12296198",
+          "title": "Divis Laboratories Q2 results",
+          "published_at": "2026-11-07T13:08:00+05:30"
+        }
+      ]
+    },
+    {
+      "symbol": "GLAND",
+      "side": "LONG",
+      "rank": 2,
+      "news_summary": "Q2FY27 PAT Rs 291 crore, up 58% YoY; revenue Rs 1,833 crore, up 23%. Sequential PAT fell 8%.",
+      "reason": "Broad YoY growth remains material despite the sequential PAT decline; that counterevidence reduces ranking below DIVISLAB.",
+      "first_available_at": "2026-11-06T18:24:00+05:30",
+      "sources": [
+        {
+          "url": "https://www.financialexpress.com/business/industry-gland-pharma-q2-result-profit-rises-58-on-strong-cdmo-revenue-4378714/",
+          "title": "Gland Pharma Q2 results",
+          "published_at": "2026-11-06T18:24:00+05:30"
+        }
+      ]
+    },
+    {
+      "symbol": "TATASTEEL",
+      "side": "LONG",
+      "rank": 3,
+      "news_summary": "Q2FY27 consolidated PAT Rs 3,699.59 crore, up 16.2% YoY; revenue Rs 65,436.24 crore, up 11.5%. Noel Tata retires effective November 11.",
+      "reason": "Revenue and profit growth support a LONG; director retirement is governance counterevidence and tempers conviction.",
+      "first_available_at": "2026-11-07T13:41:00+05:30",
+      "sources": [
+        {
+          "url": "https://economictimes.indiatimes.com/markets/stocks/earnings/tata-steel-q2-results-profit-rises-16-yoy-to-rs-3700-crore-revenue-up-11-noel-tata-to-retire-as-director/articleshow/135630842.cms",
+          "title": "Tata Steel Q2 results and Noel Tata retirement",
+          "published_at": "2026-11-07T13:41:00+05:30"
+        }
+      ]
+    },
+    {
+      "symbol": "COHANCE",
+      "side": "SHORT",
+      "rank": 1,
+      "news_summary": "Q2FY27 consolidated revenue Rs 476.65 crore, down 14.2% YoY; PAT Rs 2.27 crore versus Rs 66.39 crore, down 96.6%. QoQ improvement and management expectation of stronger H2 are counterevidence.",
+      "reason": "Severe YoY profit contraction alongside falling revenue remains material despite sequential recovery and the stronger-H2 outlook.",
+      "first_available_at": "2026-11-06T17:48:27+05:30",
+      "sources": [
+        {
+          "url": "https://nsearchives.nseindia.com/corporate/SUVENPHARMSUSHEEL_06112026174827_Cohance_Outcome_BM_06112026_uploading.pdf",
+          "title": "Cohance Q2 H1FY27 board outcome and results",
+          "published_at": "2026-11-06T17:48:27+05:30"
+        },
+        {
+          "url": "https://www.equitybulls.com/news/378706/cohance-lifesciences-announces-q2-h1fy27-results",
+          "title": "Cohance Lifesciences Q2 H1FY27 results",
+          "published_at": "2026-11-06T21:45:00+05:30"
+        }
+      ]
+    }
+  ]
+}
