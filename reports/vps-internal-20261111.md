@@ -44,7 +44,9 @@ The retired route `POST /api/v1/signals/incoming` returns `410` in internal mode
 - `.github/workflows/deploy-live-vps.yml`: `workflow_dispatch` only, guarded to
   `refs/heads/main`. A push to `main` no longer deploys production.
 
-## 3. Dashboard activation verified at 12:45 IST
+## 3. Dashboard activation
+
+### 12:45 IST — internal intake first activated
 
 - Release: `/home/jadhavdnyaneshwar701/kotak-news-live/releases/vps-internal-20261111`
 - Image: `kotak-news-live:vps-internal-20261111`
@@ -54,23 +56,41 @@ The retired route `POST /api/v1/signals/incoming` returns `410` in internal mode
 - Runtime mode: `SIGNAL_INGEST_MODE=internal`; intake URL uses the SELECT-only
   `news_reader` account on the private news network
 
-Verified live: `/health` returned `LIVE_ONLY` with `orders_armed:false`;
-unauthenticated `/api/state` returned `401`; the retired route returned `410`;
-`/ready` returns `503` after 09:30 by design.
+That container proved the internal path but predated the WebSocket encoder and
+health-intake changes: `/health` had no `news_intake`, the database had no
+`pipeline_version` column and `/ws` logged `TypeError: Object of type date is not
+JSON serializable`.
 
-### Known gap in that container
+### 13:55 IST — redeploy from the committed SHA
 
-The running image predates the WebSocket encoder and health-intake changes. Live
-evidence on 11 November:
+- SHA: `3d7cafd6904e566313a4c36cf6d97de4ec6850ce` (branch merged to `main`)
+- Release: `/home/jadhavdnyaneshwar701/kotak-news-live/releases/3d7cafd6904e566313a4c36cf6d97de4ec6850ce`
+- `last_verified_live_commit` now records the same SHA
+- `current` symlink and container point at the new release
+- Activation script output:
+  `PASS: internal intake, provenance status, retired public route 410, orders DISARMED`
 
-- `GET /health` has no `news_intake` object.
-- The dashboard database has no `signal_reports.pipeline_version` column.
-- `docker logs` still shows
-  `TypeError: Object of type date is not JSON serializable` from `/ws`.
+Post-deploy checks against the live container:
 
-A redeploy from the commit in this report is required. Until then the live
-dashboard is on the internal intake path but cannot show provenance or serve a
-clean WebSocket.
+- `/health`: `LIVE_ONLY`, `orders_armed:false`,
+  `news_intake.mode=VPS_INTERNAL`, `status=LEGACY_REPORT_PRESERVED`
+- `signal_reports` and `signal_batches` both have `pipeline_version`
+- authenticated `/api/state`: `research_gate.status=LEGACY_OR_UNVERIFIED_PRODUCER`,
+  `required=vps-codex-final-v1`, `pipeline_version=null`
+- all eight stored signals show `entry_eligible=false` and
+  `entry_status=RESEARCH_ONLY`
+- authenticated `/api/v1/signals/status` returns `pipeline_version` (null today)
+- authenticated `/ws` returns a JSON snapshot; zero serialization errors since
+  the restart
+- unauthenticated `/api/state` returns `401`; the retired route returns `410`;
+  `/ready` returns `503` after 09:30 by design
+
+### SELECT-only grant
+
+`news_reader` has `SELECT` only on the ten news tables, including
+`news_morning_reports`. `has_table_privilege` confirms `INSERT=false` and
+`UPDATE=false`; `SELECT=true`. The dashboard therefore cannot alter the news
+record it reads.
 
 ## 4. Legacy report preservation
 
@@ -136,27 +156,25 @@ fills or profitability.
 
 ## 7. Open limits
 
-- The running dashboard image must be replaced by the commit described here before
-  `/health.news_intake`, provenance columns and the WebSocket fix are live.
 - No verified `vps-codex-final-v1` report exists yet; the first possible one is
-  tomorrow's FINAL run.
+  tomorrow's FINAL run. Today's dashboard correctly rejects the legacy report.
 - Codex/OpenCode quota remains unverified. Codex returned `NO_VERIFIED_RESULTS`
   during the audit and no model ID is recorded. The FINAL job fails closed rather
   than fabricating a selection.
 - Five sources failed and three were blocked in the reference run; registered
   routes are not a coverage guarantee.
-- The NSE holiday calendar covers 2026 only.
+- The NSE holiday calendar covers 2026 only and fails closed after that; it must
+  be extended before 2027.
 - Database credentials exposed in earlier tool output still need rotation.
-- GitHub `main` does not yet contain this release; it is committed on a branch and
-  must be merged before the manual deploy workflow can be dispatched from `main`.
+- The dashboard is bound to `127.0.0.1:8010`; public access depends on the
+  existing HTTPS proxy, which was not re-tested in this change.
 
 ## 8. Next verification
 
-1. Deploy the committed SHA and confirm `/health` shows
-   `"news_intake":{"mode":"VPS_INTERNAL"`, the status API returns
-   `pipeline_version`, and `/ws` no longer logs a serialization error.
-2. Confirm today's report renders as `LEGACY_OR_UNVERIFIED_PRODUCER` and is not in
-   the executable list.
-3. At the next regular session, verify the 09:05/09:10 FINAL row carries
-   `vps-codex-final-v1`, the internal intake acknowledges the same date and SHA-256,
-   and the 09:15 lock admits only that report.
+1. At the next regular session, verify the 09:05/09:10 FINAL row carries
+   `vps-codex-final-v1` in `evidence`, the internal intake acknowledges the same
+   date and SHA-256, and the 09:15 lock admits only that report.
+2. Confirm the first live `vps-codex-final-v1` report renders as executable and
+   that a later or legacy batch still cannot change the frozen list.
+3. Rotate the exposed database credentials in a planned window and re-verify the
+   collector heartbeat and intake after the change.
