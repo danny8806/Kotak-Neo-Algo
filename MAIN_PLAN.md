@@ -49,6 +49,8 @@ This plan connects research to the current dashboard; it does not alter the auth
 
 ## Source registry and agents
 
+The Python collector uses feedparser for validated Atom feeds, lxml for their HTML summaries, and Trafilatura to extract bounded visible article text when publisher summary metadata is absent. These helpers operate on already-fetched source bytes inside the existing collector. They do not create another scheduler, network route, selector, inferred publication time or source-access bypass. Other tested browser, processing and CLI products remain lab-only unless separately integrated and validated for a concrete source.
+
 Production source URLs and enabled states are in the deployed news service's `news_collector/sources.json` and `source_registry.json`. At the 11 November audit the source file contained 98 registered routes and 86 enabled flags, including seven provider APIs requiring private keys/opt-in. Effective polling still obeys access restrictions, keys and cost guards; use the completed run's source-health records to establish actual coverage. A registered or enabled route is not a successful-fetch guarantee. Do not invent source coverage or enable paid providers implicitly.
 
 Additional CLI names/assignment templates may remain as inactive adapters; they are not production workers until an authenticated live-retrieval runner is configured, tested and explicitly included. Do not claim they are running, automatically install them, or introduce a second final selector. Exact actual model IDs and quota states must be reported from runtime evidence, not inferred from a CLI name. Codex's model was not pinned/evidenced in the audited VPS invocation; the old desktop Sol configuration does not establish it.
@@ -60,4 +62,3 @@ Validate the two stages in isolated tests before activation: immutable cutoffs, 
 After deployment verify: active VPS timers, actual completed source-to-DB heartbeat, a final report from the new producer, internal date/hash acknowledgment, exact mapping, no parallel local/GitHub producer and retained historical/order records. A running timer is not proof of fresh DB writes; report errors and incomplete real-session evidence honestly.
 
 Never use older planning documents, branches, diagrams or run reports to restore retired ChatGPT/desktop/GitHub publishing, extra selection stages, an external bridge or a different timing policy. Change this document first when the user changes the plan.
-
