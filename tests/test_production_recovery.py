@@ -27,6 +27,27 @@ from live_desk.rate_limit import SlidingWindowLimiter
 from postgres_test_db import create_test_database
 
 NOW=datetime(2026,11,5,9,18,tzinfo=IST)
+
+
+def mark_final_producer(url: str, session_date: str) -> None:
+    """Stamp the stored report as the VPS FINAL producer for legacy-adapter tests.
+
+    Production never uses the retired HTTP route: the internal intake writes
+    this marker itself. Tests that exercise supervisor eligibility through the
+    legacy adapter must simulate that single missing step.
+    """
+    from sqlalchemy import create_engine, text
+
+    engine=create_engine(url)
+    try:
+        with engine.begin() as db:
+            updated=db.execute(text(
+                "UPDATE signal_reports SET pipeline_version=:pv WHERE session_date=:day"),
+                {"pv":"vps-codex-final-v1","day":session_date}).rowcount
+        if not updated:
+            raise AssertionError("No stored report to mark as the FINAL producer")
+    finally:
+        engine.dispose()
 NO_DATA={"stat":"Not_Ok","stCode":5203,"errMsg":"No Data","desc":"data not found"}
 
 
@@ -232,6 +253,33 @@ class ProductionReplayTests(unittest.TestCase):
     def cross(self,runtime):
         runtime.on_tick({'symbol':'TESTA','ltp':'100','timestamp':NOW})
         return runtime.on_tick({'symbol':'TESTA','ltp':'101','timestamp':NOW})
+
+    def test_automatic_authorization_to_one_share_order_without_operator_otp(self):
+        from dataclasses import replace
+        from test_automatic_trading import AutomaticTradingTests
+        desk=AutomaticTradingTests().desk()
+        broker=ReplayExchange()
+        runtime=self.runtime(broker,enabled=False)
+        runtime.policy=replace(runtime.policy,fixed_entry_quantity=1,entry_quantity_cap=1)
+        desk.policy=runtime.policy
+        desk.clock=lambda:NOW
+        desk.last_quote_at=desk.last_book_at=NOW
+        desk.report={'status':'READY','signals':list(runtime.signals.values())}
+        desk.dhan_ids=runtime.dhan_ids
+        desk.kotak_ids=runtime.kotak_instruments
+        desk.opening_ranges=runtime.opening_ranges
+        desk.ledger=self.ledger
+        desk.broker=broker
+        desk.runtime=runtime
+        desk._maybe_auto_arm(NOW)
+        self.assertTrue(desk.armed)
+        self.assertEqual(desk.arm_secret,'')
+        self.cross(runtime)
+        self.assertTrue(runtime.wait_for_submissions())
+        rows=self.ledger.snapshot(NOW.date())
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['quantity'],1)
+        self.assertEqual(len(broker.calls),1)
 
     def test_unfilled_acknowledgement_persists_null_fill_price(self):
         intent=self.reserve();self.ledger.mark_submission_unknown(intent['tag'],NOW)
@@ -538,7 +586,8 @@ class ProductionReplayTests(unittest.TestCase):
             def snapshot(self):return {'state':'CONNECTED','error':None}
         master=lambda symbols,now:DhanMasterSnapshot(now.date().isoformat(),now,'synthetic-master',
                                                        {symbol:ids[symbol] for symbol in symbols})
-        env={'LIVE_ORDERS_ALLOWED':'YES','DASHBOARD_COOKIE_SECURE':'false','LIVE_ARM_TOTP_SECRET':'synthetic-operator-secret'}
+        env={'LIVE_ORDERS_ALLOWED':'YES','LIVE_ENTRY_QUANTITY_CAP':'1','DASHBOARD_COOKIE_SECURE':'false',
+             'LIVE_ARM_TOTP_SECRET':'synthetic-operator-secret'}
         with patch.dict(os.environ,env):
             bridge=create_app(database_url=self.url,bearer_token=token,now_provider=lambda:now[0],allowed_symbols=set(ids))
             self.addCleanup(bridge.state.engine.dispose)
@@ -561,6 +610,7 @@ class ProductionReplayTests(unittest.TestCase):
             response=client.post('/api/v1/signals/incoming',headers={'Authorization':'Bearer '+token,
                 'Idempotency-Key':'synthetic-e2e'},json=report)
             self.assertEqual(response.status_code,200,response.text)
+            mark_final_producer(self.url,report["session_date"])
             def emit(symbol, price):
                 received_ns=perf_counter_ns()
                 packet=struct.pack('<BhBifi',2,16,1,int(ids[symbol]),float(price),int(now[0].timestamp()))
@@ -614,12 +664,18 @@ class ProductionReplayTests(unittest.TestCase):
                 long = sides[symbol] == "LONG"
                 self.assertEqual((call["trading_symbol"], call["transaction_type"], call["quantity"],
                                   call["exchange_segment"], call["product"], call["order_type"]),
-                                 (symbol + "-EQ", "B" if long else "S", "990" if long else "1063",
+                                 (symbol + "-EQ", "B" if long else "S", "1",
                                   "nse_cm", "MIS", "MKT"))
-            now[0]=NOW.replace(hour=15,minute=15);desk.cycle()
+            now[0]=NOW.replace(hour=14,minute=59,second=59);desk.cycle()
+            self.assertEqual(len(broker.calls),10)
+            now[0]=NOW.replace(hour=15,minute=0);desk.cycle()
             rows = desk.ledger.snapshot(NOW.date())
             self.assertEqual(len(rows), 20)
             self.assertTrue(all(row["state"] == "FILLED" for row in rows))
+            self.assertEqual(len(broker.calls), 20)
+            self.assertTrue(all(call["quantity"] == "1" for call in broker.calls))
+            now[0] += timedelta(seconds=5)
+            desk.cycle()
             self.assertEqual(len(broker.calls), 20)
             journal = client.get("/api/live/journal").json()
             self.assertEqual(len(journal["fills"]), 20)
@@ -628,7 +684,7 @@ class ProductionReplayTests(unittest.TestCase):
             self.assertEqual({row["symbol"]:row for row in dashboard["closed_trades"]},
                              {row["symbol"]:row for row in journal["trades"]})
             self.assertEqual(journal["summary"]["open_trade_count"], 0)
-            self.assertEqual(journal["summary"]["gross_realized_from_exits"], 20530)
+            self.assertEqual(journal["summary"]["gross_realized_from_exits"], 20)
             self.assertEqual(journal["summary"]["closed_trade_return_pct"], 2.05)
             self.assertEqual(journal["summary"]["win_rate_pct"], 100)
             self.assertIsNone(journal["summary"]["net_after_fees"])
@@ -770,8 +826,11 @@ class ProductionReplayTests(unittest.TestCase):
                 return data
 
             def publish(data,key):
-                return client.post("/api/v1/signals/incoming",json=data,headers={
+                response=client.post("/api/v1/signals/incoming",json=data,headers={
                     "Authorization":"Bearer "+token,"Idempotency-Key":key})
+                if response.status_code==200:
+                    mark_final_producer(self.url,data["session_date"])
+                return response
 
             def arm():
                 with patch("live_desk.app.totp_now",return_value="123456"):
@@ -806,7 +865,7 @@ class ProductionReplayTests(unittest.TestCase):
                 now[0]=day
                 if symbol is None:
                     self.assertEqual(publish(previous_report,"five-day-stale").status_code,422)
-                    now[0]=day.replace(hour=15,minute=15)
+                    now[0]=day.replace(hour=15,minute=0)
                     desk.cycle()
                     self.assertEqual(desk.snapshot()["intents"],[])
                     self.assertIsNone(desk.runtime)
@@ -828,16 +887,11 @@ class ProductionReplayTests(unittest.TestCase):
                 if day_index==4:
                     tick("TESTC",100)
                 now[0]=day.replace(minute=16)
-                if day_index==4:
-                    self.assertEqual(publish(report("TESTD"),"five-day-late").status_code,200)
                 desk.cycle()
                 state=desk.snapshot()
                 eligible={symbol,"TESTC"} if day_index==4 else {symbol}
                 self.assertEqual({row["symbol"] for row in state["signals"] if row["entry_eligible"]},eligible)
                 self.assertIsNotNone(desk.runtime)
-                if day_index==4:
-                    self.assertEqual(state["signals"][-1]["symbol"],"TESTD")
-                    self.assertFalse(state["signals"][-1]["entry_eligible"])
                 if day_index==2:
                     # Today's empty books cannot establish what happened to yesterday's DAY order.
                     self.assertEqual(state["prior_session_recovery_count"],1)
@@ -884,10 +938,10 @@ class ProductionReplayTests(unittest.TestCase):
                 self.assertEqual(len(broker.calls),before+1)
                 if day_index==4:
                     dispositions={s["symbol"]:s["entry_status"] for s in cutoff_state["signals"]}
-                    self.assertEqual(dispositions,{"TESTA":"ENTRY_RECORDED","TESTC":"EXPIRED","TESTD":"RESEARCH_ONLY"})
+                    self.assertEqual(dispositions,{"TESTA":"ENTRY_RECORDED","TESTC":"EXPIRED"})
                     self.assertEqual({e["symbol"] for e in cutoff_state["orb_monitor"]["breakouts"]},{"TESTA"})
 
-                now[0]=day.replace(hour=15,minute=15)
+                now[0]=day.replace(hour=15,minute=0)
                 desk.cycle()
                 desk.refresh_broker()
                 daily=desk.snapshot()

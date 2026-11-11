@@ -9,6 +9,8 @@ __pycache__/
 .venv/
 logs/
 node_modules/
+debug.log
+*.tgz
 
 # Local production verification artifacts
 reports/live-dashboard-*.png

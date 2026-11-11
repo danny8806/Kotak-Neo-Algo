@@ -7,7 +7,7 @@ const fmt=(x,d=2)=>x===null||x===undefined||x===""||!Number.isFinite(Number(x))?
 const money=x=>x===null||x===undefined||x===""?"—":"₹"+fmt(x);
 const safeText=v=>v===undefined||v===null||v===""?"—":String(v);
 const human=v=>safeText(v).replaceAll("_"," ").toLowerCase().replace(/^./,c=>c.toUpperCase());
-const VIEWS={overview:["Overview","Session overview","YOUR SESSION AT A GLANCE","Track live P&L, the opening workflow, and order readiness."],signals:["News signals","Verified news signals","RESEARCH WORKSPACE","Inspect the current watchlist and the evidence behind each candidate."],market:["Market monitor","Opening range & instruments","MARKET DATA","Follow the opening range, observed crossings, and exact broker mappings."],positions:["Positions & P&L","Positions & profit and loss","LIVE ACCOUNT","Broker-confirmed quantities, fresh valuations, and transparent gross P&L."],orders:["Order book","Broker order book","EXECUTION WORKSPACE","Search every reported order and inspect its broker status."],fills:["Executed fills","Executed fills","BROKER-CONFIRMED ACTIVITY","Actual reported executions, quantities, and fill prices."],journal:["Trade journal","Trade journal & performance","HISTORICAL PERFORMANCE","Review persisted fills, confirmed trade outcomes, and order lifecycle events."],connections:["Connections & checks","Connections & diagnostics","SYSTEM OPERATIONS","Inspect authentication, data freshness, and read-only connection tests."],settings:["Settings","Trading configuration","SESSION CONTROLS","Review sizing, position limits, session times, and order authorization."]};
+const VIEWS={overview:["Overview","Session overview","YOUR SESSION AT A GLANCE","Track live P&L, the opening workflow, and order readiness."],signals:["News signals","News signals","RESEARCH WORKSPACE","Inspect the current watchlist, reported news, source and publication time."],market:["Market monitor","Opening range & instruments","MARKET DATA","Follow the opening range, observed crossings, and exact broker mappings."],positions:["Positions & P&L","Positions & profit and loss","LIVE ACCOUNT","Broker-confirmed quantities, fresh valuations, and transparent gross P&L."],orders:["Order book","Broker order book","EXECUTION WORKSPACE","Search every reported order and inspect its broker status."],fills:["Executed fills","Executed fills","BROKER-CONFIRMED ACTIVITY","Actual reported executions, quantities, and fill prices."],journal:["Trade journal","Trade journal & performance","HISTORICAL PERFORMANCE","Review persisted fills, confirmed trade outcomes, and order lifecycle events."],connections:["Connections & checks","Connections & diagnostics","SYSTEM OPERATIONS","Inspect authentication, data freshness, and read-only connection tests."],settings:["Settings","Trading configuration","SESSION CONTROLS","Review sizing, position limits, session times, and order authorization."]};
 const GATES={CURRENT_SESSION_SIGNALS:["Current-session research","signals"],KOTAK_AUTHENTICATION:["Kotak authentication","connections"],DHAN_AUTHENTICATION:["Dhan authentication","connections"],BROKER_BOOKS:["Fresh broker account books","connections"],INSTRUMENT_MAPPING:["Exact instrument mappings","market"],OPENING_RANGE:["Completed opening candle","market"],MARKET_FEED:["Market feed connection","market"],FRESH_QUOTES:["Fresh exchange prices","market"],MARKET_ENTRY_WINDOW:["Entry time window","settings"],FUNDS:["Funds and gross allocation","settings"],EXECUTION_RUNTIME:["Execution runtime","connections"],SUPERVISOR_ERROR:["Supervisor health","connections"],PRIOR_SESSION_RECOVERY:["Prior-session recovery","connections"],SERVER_ORDERS_DISABLED:["Server order permission","settings"]};
 let current=null,selectedSymbol=null,ws=null,lastStateReceipt=0,lastServerTime=0,activeView="overview",settingsDirty=false,settingsSaving=false,stateStale=true,streamConnected=false,signalFilter="all",positionFilter="all",marketTab="orb",toastTimer,journalData=null,journalLoading=false,journalError=null;
 const pages={positions:1,orders:1,fills:1},PAGE_SIZE=50,renderCache=new Map();
@@ -75,7 +75,7 @@ function renderOpeningWorkflow(s){
  const opening=ranges?ranges+" verified":orb.state==="WARMING"?"Feed warming":"Waiting";
  workflowStage("stageRange","workflowRange",opening,ranges?"ready":"");
  workflowStage("stageEntries","workflowEntries",
-  orb.state==="ENTRY_WINDOW_CLOSED"?"Cutoff passed":s.readiness?(s.armed?"Armed":"Ready to arm"):"Blocked",
+  orb.state==="ENTRY_WINDOW_CLOSED"?"Cutoff passed":s.readiness?(s.armed?"Armed":s.automatic_trading?.enabled?"Automatic checks":"Ready to arm"):"Blocked",
   s.readiness?(s.armed?"armed":"ready"):"blocked");
  const closed=Array.isArray(s.closed_trades)?s.closed_trades.length:null;
  workflowStage("stageExit","workflowExit",closed===null?"Unavailable":closed+" confirmed",closed?"ready":"");
@@ -105,7 +105,7 @@ function renderSessionStatus(s){
  if(s.armed&&s.readiness){
   sessionBanner("Live entries armed","The terminal can send real Kotak orders when a breakout qualifies.","armed","settings","Order controls");
  }else if(s.readiness){
-  sessionBanner("Ready to arm","Entry checks passed. Operator authorization is required to start live entries.","ready","settings","Order controls");
+  sessionBanner(s.automatic_trading?.enabled?"Automatic trading ready":"Ready to arm",s.automatic_trading?.enabled?s.automatic_trading?.paused_today?"Automatic entries are stopped for today.":"Entry checks passed. Automatic mode starts without a separate operator OTP.":"Entry checks passed. Operator authorization is required to start live entries.","ready","settings","Order controls");
  }else{
   const notes={
    SERVER_ORDERS_DISABLED:"Server order permission is off.",
@@ -128,14 +128,18 @@ function settingsPreview(){
  const perStock=paise("settingAllocation"), gross=paise("settingGross"), slots=number("settingMaxPositions");
  const validCapital=perStock>0&&gross>=perStock&&slots>0;
  const cash=stateStale?null:current?.available_cash;
+ const quantityCap=current?.strategy?.entry_quantity_cap;
+ const fixedQuantity=current?.strategy?.fixed_entry_quantity;
  text("settingsPlanned",money(validCapital?Math.min(gross,slots*perStock)/100:null));
  text("settingsSlots",validCapital?Math.min(slots,Math.floor(gross/perStock)):null);
  text("settingsFunds",money(cash));
- text("settingsFundingNote",cash===null||cash===undefined?"Waiting for fresh Kotak funds.":
+ text("settingsFundingNote",fixedQuantity===1?"Exactly one share per stock. Kotak determines margin acceptance or rejection.":
+  cash===null||cash===undefined?"Waiting for fresh Kotak funds.":
   gross>0&&gross>Math.round(Number(cash)*100)?"Available funds are below the gross cap. Entries stay blocked by the funds check.":
+  quantityCap?"Entry quantity is capped at "+quantityCap+" per stock.":
   "Full-size allocations use the entire per-stock budget. Actual quantities round down.");
  const price=paise("settingsPrice"),shares=price>0&&perStock>0&&$("settingsPrice").validity.valid?
-  Math.floor(perStock/price):null;
+  (fixedQuantity===1?1:Math.min(Math.floor(perStock/price),quantityCap??Infinity)):null;
  text("settingsShares",shares===null?"Enter a price to estimate whole shares per stock.":
   fmt(shares,0)+(shares===1?" share":" shares")+" · "+money(shares*price/100)+" reference notional");
  const seconds=id=>{
@@ -146,6 +150,7 @@ function settingsPreview(){
  if(gross>0&&gross<perStock)issue="Gross cap must cover at least one stock allocation.";
  else if(slots>number("settingMaxLong")+number("settingMaxShort"))issue="Maximum stocks cannot exceed the combined LONG and SHORT limits.";
  else if(seconds("settingExit")<=seconds("settingCutoff"))issue="Square-off must follow the entry cutoff.";
+ else if($("settingExit").validity.rangeOverflow)issue="Square-off must be no later than 15:00 IST.";
  text("settingsValidation",issue);
  $("settingsValidation").hidden=!issue;
  return !issue;
@@ -179,9 +184,14 @@ function render(s){
  const blockers=s.readiness_blockers||[],total=Object.keys(GATES).length,passed=total-new Set(blockers.filter(k=>GATES[k])).size;
  $("gateProgress").max=total;$("gateProgress").value=passed;
  text("gateSummary",passed+" of "+total+" prerequisites verified");text("allGateSummary",s.readiness?"All entry checks passed":blockers.length+" checks need attention before new entries");gates(s);renderSessionStatus(s);renderOpeningWorkflow(s);
- text("policy","09:15 one-minute opening range. New-entry cutoff "+safeText(s.strategy?.entry_cutoff)+"; square-off "+safeText(s.strategy?.exit_time)+" IST. Up to "+safeText(s.strategy?.max_long)+" LONG / "+safeText(s.strategy?.max_short)+" SHORT, "+safeText(s.strategy?.max_positions)+" total positions. Allocation "+money(s.strategy?.allocation_per_position)+" per stock; gross cap "+money(s.strategy?.gross_cap)+".");
- text("armNotice",!s.orders_permitted_by_server?"Server order permission is off. Account monitoring remains read-only.":s.armed?"This session is armed for actual Kotak orders.":s.readiness?"Prerequisites passed. Operator authorization and TOTP are required.":"Order authorization is locked until all prerequisites pass.");
- $("arm").disabled=!(s.orders_permitted_by_server===true&&s.readiness===true&&!s.armed);$("disarm").disabled=!s.armed;syncSettings();
+ text("policy","09:15 one-minute opening range. New-entry cutoff "+safeText(s.strategy?.entry_cutoff)+"; square-off "+safeText(s.strategy?.exit_time)+" IST. Up to "+safeText(s.strategy?.max_long)+" LONG / "+safeText(s.strategy?.max_short)+" SHORT, "+safeText(s.strategy?.max_positions)+" total positions. "+(s.strategy?.fixed_entry_quantity===1?"Exactly one share per stock; Kotak checks margin. ":"Allocation "+money(s.strategy?.allocation_per_position)+" per stock; ")+"gross cap "+money(s.strategy?.gross_cap)+".");
+ const automatic=s.automatic_trading?.enabled===true,paused=s.automatic_trading?.paused_today===true;
+ text("authorizationMode",automatic?"AUTOMATIC · ONE SHARE":"MANUAL CONTROL");
+ text("authorizationHelp",automatic?"Broker login and live readiness checks authorize one-share entries automatically. Closing or signing out of this dashboard does not stop automatic trading.":"Arming permits actual Kotak orders after all session prerequisites pass.");
+ text("armNotice",!s.orders_permitted_by_server?"Server order permission is off. Account monitoring remains read-only.":automatic?paused?"Automatic entries are stopped for today. The stop survives restarts; the next session checks readiness again.":s.armed?"Automatic one-share trading is active. Kotak determines order acceptance.":s.automatic_trading?.error||"Automatic mode is waiting for the entry window and live readiness checks. No separate operator OTP is required.":s.armed?"This session is armed for actual Kotak orders.":s.readiness?"Prerequisites passed. Operator authorization and TOTP are required.":"Order authorization is locked until all prerequisites pass.");
+ $("arm").hidden=automatic;$("arm").disabled=automatic||!(s.orders_permitted_by_server===true&&s.readiness===true&&!s.armed);
+ text("disarm",automatic?"Stop new orders today":"Disarm new entries");
+ $("disarm").disabled=automatic?paused:!s.armed;syncSettings();
  const dhan=s.dhan_authentication||{},kotak=s.kotak_authentication||{};text("diagnostics","Dhan auth: "+(dhan.state||"NEEDS_SETUP")+" · Kotak auth: "+(kotak.state||"NOT_STARTED")+" · Feed: "+feed+". Next refresh: Dhan "+stamp(dhan.next_refresh)+" / Kotak "+stamp(kotak.next_refresh)+" IST. Broker book: "+stamp(s.broker_books_updated_at)+" IST.");
  const errors=[s.error,dhan.error,kotak.error,s.position_feed_error,...(s.runtime_errors||[])].filter(Boolean);text("errors",errors.join(" | ")||"No runtime errors reported.");text("auditState",errors.length?"ATTENTION":"NO RUNTIME ERRORS");
  const intents=s.intents||[];text("intentInfo",intents.length+" durable order intents · "+intents.filter(x=>["RESERVED","SUBMISSION_UNKNOWN","PARTIAL","ACKNOWLEDGED","CANCEL_PENDING"].includes(x.state)).length+" unresolved. Intents are not executed fills.");
@@ -236,7 +246,7 @@ function renderBook(kind){
 function renderSignals(){
  const q=query("signalSearch"),signals=(current.signals||[]).filter(s=>s.symbol.toLowerCase().includes(q)&&(signalFilter==="all"||s.side===signalFilter)).sort((a,b)=>(a.side||"").localeCompare(b.side||"")||(a.rank||0)-(b.rank||0));
  text("signalResultCount",signals.length+" stocks");const data=signals.map(s=>[s,current.quotes?.[s.symbol]||{}]);
- if(changed("signals",data)){const f=document.createDocumentFragment();if(!signals.length)f.append(emptyRow(6,(current.signals||[]).length?"No candidates match these filters.":"No current-session verified news signals. New entries remain locked."));
+ if(changed("signals",data)){const f=document.createDocumentFragment();if(!signals.length)f.append(emptyRow(6,(current.signals||[]).length?"No candidates match these filters.":"No current-session news signals. New entries remain locked."));
  for(const s of signals){const quote=current.quotes?.[s.symbol]||{},price=quote.fresh?quote.ltp:null,opened=quote.open||null,change=price!==null&&opened?100*(price-opened)/opened:null,stock=td(null),b=el("button",s.symbol,"stock-button");b.addEventListener("click",()=>{selectedSymbol=s.symbol;renderEvidence();});stock.append(b);if(s.entry_eligible===false)stock.append(el("small","Research only","muted"));else if(s.entry_status==="EXPIRED")stock.append(el("small","Expired · no trigger","muted"));f.append(row(td(s.rank),stock,td(s.side,"side "+(s.side==="LONG"?"long":"short")),td(money(price),"numeric"),td(money(opened),"numeric"),td(change===null?"—":(change>=0?"+":"")+fmt(change)+"%","numeric "+tone(change))));}$("signalBody").replaceChildren(f);}
  if(!selectedSymbol||(current.signals||[]).every(s=>s.symbol!==selectedSymbol))selectedSymbol=signals[0]?.symbol||null;renderEvidence();
 }
@@ -255,7 +265,7 @@ function renderMarket(){
  const breakouts=new Map((orb.breakouts||[]).map(event=>[event.symbol,event]));
  const data=ranges.map(r=>[r,current.quotes?.[r.symbol],breakouts.get(r.symbol),signals.get(r.symbol)]);
  text("orbInfo",closed?"Entry monitoring ended at the cutoff. Broker reconciliation and square-off continue.":
-  orb.state==="MONITORING"?orb.order_submission_enabled?"Fresh ticks monitored · order gate armed separately":"Live tick monitoring · order gate remains disarmed":
+  orb.state==="MONITORING"?orb.order_submission_enabled?"Fresh ticks monitored · live order submission enabled":"Live tick monitoring · order gate remains disarmed":
   orb.state==="WARMING"?"Dhan feed warming · waiting for the 09:15–09:16 candle.":"Waiting for verified signals and a completed opening candle.");
  if(!changed("orb",[closed,data]))return;
  const rows=document.createDocumentFragment();

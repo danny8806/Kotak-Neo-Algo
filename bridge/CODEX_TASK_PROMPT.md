@@ -1,10 +1,5 @@
-# Codex scheduled task: deliver incremental session signals
+# Retired external research publishing path
 
-Run whenever triggered, on any calendar day and at any time. Off-session reports are accepted and mapped for the dashboard; the live terminal starts ORB monitoring only inside its regular market entry window.
+Read [MAIN_PLAN.md](../MAIN_PLAN.md), the sole current plan.
 
-1. Read `schema/stock-signals.schema.json` and the current official eligible-universe snapshot at `live_desk/nifty500_universe.json`.
-2. On each run, record the actual current IST time as the batch `news_cutoff_at`, even before market open, after market close, or on weekends. Research newly available NSE/BSE filings and reliable financial sources since the previous run (the first run starts at the previous NSE session's 15:00 IST). Use current official Nifty 500 symbols only. Verify each source URL, publication time, symbol identity, materiality, and counterevidence. Do not invent candidates or sources.
-3. Send only newly qualified symbols. Never repeat a previously sent symbol, change its direction, or submit more than five LONG and five SHORT symbols total for the session. Rank the new batch separately from 1. If no new candidates qualify, do not send a report. Do not use an empty batch to replace or clear today's accumulated signals.
-4. Produce one JSON report matching schema version 1.0 with `execution_enabled: false`, `market: NSE`, `timezone: Asia/Kolkata`, today's session date, actual run time as `generated_at`, and the actual current IST time as `news_cutoff_at`. Each candidate needs a reason, news summary, first-available timestamp, and at least one real HTTPS source published no later than the cutoff.
-5. Save the batch to a temporary JSON file and run `node bridge/send_codex.js <report-file>` from the project root. The sender reads `SIGNAL_BRIDGE_URL` and `SIGNAL_BRIDGE_TOKEN` from the ignored project `.env`, posts directly to the dashboard bridge at any time, and prints only the acknowledgment. Never display or include secret values in the report or result.
-6. Report delivery only when the sender prints `ACCEPTED` or `DUPLICATE` with today's session date and SHA-256. If it fails, report `NOT DELIVERED` and the safe error. Do not retry with another host, disable TLS checks, arm orders, or place orders.
+Production news is collected and selected on the VPS, then accepted by the dashboard through internal Python intake over its private database network. Do not run a local/ChatGPT/GitHub signal publisher or public HTTP sender. The shared intake library and schema remain for internal validation; old sender code is inactive compatibility history, not an operating instruction.

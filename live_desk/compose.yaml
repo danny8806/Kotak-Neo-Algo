@@ -26,6 +26,10 @@ services:
     environment:
       SIGNAL_DATABASE_URL: postgresql+psycopg://kotak:${POSTGRES_PASSWORD:?Set a private URL-safe PostgreSQL password}@postgres/kotak_live
       LIVE_DATABASE_URL: postgresql+psycopg://kotak:${POSTGRES_PASSWORD:?Set a private URL-safe PostgreSQL password}@postgres/kotak_live
+      # Production handoff is SELECT-only over the private news network.
+      # Set SIGNAL_INGEST_MODE=external only for an isolated UI-only local run.
+      SIGNAL_INGEST_MODE: ${SIGNAL_INGEST_MODE:-internal}
+      INTERNAL_NEWS_DATABASE_URL: ${INTERNAL_NEWS_DATABASE_URL:-}
       SIGNAL_BRIDGE_TOKEN: ${SIGNAL_BRIDGE_TOKEN:?Set a private random 32+ char secret}
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?Set a strong dashboard password}
       DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET:?Set random 32+ char session secret}
@@ -35,6 +39,9 @@ services:
       LIVE_HOST: 0.0.0.0
       LIVE_PORT: "8010"
       LIVE_ORDERS_ALLOWED: ${LIVE_ORDERS_ALLOWED:-NO}
+      LIVE_ENTRY_QUANTITY_CAP: ${LIVE_ENTRY_QUANTITY_CAP:-1}
+      LIVE_FIXED_ENTRY_QUANTITY: ${LIVE_FIXED_ENTRY_QUANTITY:-}
+      LIVE_AUTO_TRADING: ${LIVE_AUTO_TRADING:-NO}
       KOTAK_NEO_CONSUMER_KEY: ${KOTAK_NEO_CONSUMER_KEY:-}
       KOTAK_NEO_MOBILE_NUMBER: ${KOTAK_NEO_MOBILE_NUMBER:-}
       KOTAK_NEO_UCC: ${KOTAK_NEO_UCC:-}
@@ -50,6 +57,7 @@ services:
       DHAN_VIX_SECURITY_ID: ${DHAN_VIX_SECURITY_ID:-21}
     ports:
       - "127.0.0.1:8010:8010"
+    networks: [default, news_private]
     volumes:
       - kotak-live-private:/data
     healthcheck:
@@ -60,3 +68,8 @@ services:
 volumes:
   kotak-live-private:
   kotak-live-postgres:
+
+networks:
+  news_private:
+    external: true
+    name: ${NEWS_PRIVATE_NETWORK:-market-news-private}

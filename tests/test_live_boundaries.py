@@ -1,5 +1,6 @@
 """ORB and Kotak request boundaries for the sole live execution path."""
 import unittest
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from random import Random
@@ -64,6 +65,20 @@ class LiveBoundaryTests(unittest.TestCase):
                 self.assertIsNone(candidate_entry(**decision, reserved_gross=Decimal("250000.00")))
                 self.assertIsNone(candidate_entry(**decision, open_positions=3))
 
+    def test_one_share_cap_respects_capital_and_both_directions(self):
+        policy = LivePolicy(time(9, 30), time(15, 15), 5, 5, 10,
+                            Decimal("1000"), Decimal("1000"), "end", entry_quantity_cap=1)
+        tick_at = datetime(2026, 11, 5, 9, 17, tzinfo=IST)
+        for side, previous, price in (("LONG", "100", "101"), ("SHORT", "95", "94")):
+            with self.subTest(side=side):
+                decision = dict(side=side, previous_price=Decimal(previous), price=Decimal(price),
+                                orb_high=Decimal("100"), orb_low=Decimal("95"), tick_at=tick_at)
+                self.assertEqual(candidate_entry(**decision, policy=policy), 1)
+                self.assertIsNone(candidate_entry(
+                    **decision, policy=replace(policy, per_position=Decimal("90"))))
+                self.assertIsNone(candidate_entry(
+                    **decision, policy=policy, reserved_gross=Decimal("950")))
+
     def test_sizing_matches_integer_paise_model_across_20000_cases(self):
         rng = Random(9301515)
         opening = datetime(2026, 11, 5, 9, 16, tzinfo=IST)
@@ -113,6 +128,16 @@ class LiveBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             place_kotak_order(client, KotakInstrument("ABC", "ABC-EQ", "bad"),
                               "BUY", 10, "another-tag")
+
+    def test_calendar_fails_closed_outside_the_published_year(self):
+        from live_desk.nse_calendar import calendar_supported, is_regular_session
+
+        self.assertTrue(is_regular_session(date(2026, 11, 11)))
+        self.assertFalse(is_regular_session(date(2026, 11, 10)))  # published holiday
+        self.assertFalse(is_regular_session(date(2026, 11, 14)))  # Saturday
+        self.assertFalse(calendar_supported(date(2027, 1, 4)))
+        # An unknown year must never open an entry window.
+        self.assertFalse(is_regular_session(date(2027, 1, 4)))
 
 
 if __name__ == "__main__":

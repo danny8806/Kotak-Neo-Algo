@@ -1,13 +1,14 @@
 """Authenticated LIVE Kotak Neo dashboard + direct news-signal receiver.
 
 No synthetic trades, no local paper ledger, no prediction model, no mock fills.
-Real entries require a separately approved, per-session operator arming step.
+Real entries require manual arming or explicitly enabled automatic trading.
 """
 from __future__ import annotations
 import asyncio, hashlib, hmac, os
 from datetime import datetime
 from pathlib import Path
 from fastapi import HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from bridge.app import create_app as bridge_app
@@ -15,6 +16,7 @@ from live_desk.dhan_data import IST, totp_now
 from live_desk.supervisor import LiveSupervisor
 from live_desk.analytics import build_trade_journal
 from live_desk.universe import load_nifty500_symbols
+from live_desk.news_intake import configured_intake
 
 ROOT=Path(__file__).resolve().parent
 COOKIE="kotak_live_session"
@@ -35,6 +37,8 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
     desk=supervisor or LiveSupervisor(app.state.engine,clock=clock,
                                        allowed_symbols=allowed_symbols)
     app.state.live=desk
+    intake = configured_intake(app.state.engine, allowed_symbols, clock)
+    app.state.news_intake = intake
     app.title="LIVE Kotak Neo · News Signal Trading Terminal"
     base_path=os.getenv("DASHBOARD_BASE_PATH","").strip().rstrip("/")
     if base_path and (not base_path.startswith("/") or base_path.startswith("//") or
@@ -79,15 +83,21 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
     @app.on_event("startup")
     def startup():
         if start_supervisor:desk.start()
+        if intake:intake.start()
 
     @app.on_event("shutdown")
     def shutdown():
+        if intake:intake.stop()
         if start_supervisor:desk.stop()
         app.state.engine.dispose()
 
     @app.get("/health")
     def health():
-        return {"status":"up","mode":"LIVE_ONLY","orders_armed":False if not desk else desk.armed}
+        # Unauthenticated liveness only. Never include credentials, broker state
+        # details or raw database errors. The intake snapshot proves that the
+        # configured SELECT-only news handoff can actually reach its database.
+        return {"status":"up","mode":"LIVE_ONLY","orders_armed":False if not desk else desk.armed,
+                "news_intake":intake.snapshot() if intake else {"mode":"LEGACY_EXTERNAL"}}
 
     @app.get("/ready")
     def ready():
@@ -115,8 +125,9 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
         require(request)
         check_origin(request)
         response.delete_cookie(COOKIE,path=base_path or "/")
-        desk.disarm("Operator signed out of live dashboard")
-        return {"authenticated":False,"armed":False}
+        if not getattr(desk,"auto_trading",False):
+            desk.disarm("Operator signed out of live dashboard")
+        return {"authenticated":False,"armed":desk.armed}
 
     @app.get("/")
     def index(request:Request):
@@ -127,7 +138,12 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
     @app.get("/api/state")
     def state(request:Request):
         require(request)
-        return desk.snapshot()
+        return {**desk.snapshot(), 'news_pipeline':intake.snapshot() if intake else {'mode':'LEGACY_EXTERNAL'}}
+
+    @app.get('/api/news-pipeline')
+    def news_pipeline(request:Request):
+        require(request)
+        return intake.snapshot() if intake else {'mode':'LEGACY_EXTERNAL'}
 
     @app.post("/api/live/settings")
     async def update_settings(request:Request,payload:dict):
@@ -188,7 +204,7 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
     async def disarm(request:Request):
         require(request)
         check_origin(request)
-        desk.disarm("Operator disabled new live orders")
+        desk.disarm("Operator disabled new live orders",pause_automatic=True)
         return {"armed":False,"note":"Existing real positions must still be monitored and reconciled"}
 
     @app.websocket("/ws")
@@ -206,7 +222,7 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
                 state=await asyncio.to_thread(desk.snapshot)
                 if not logged_in(cookie):
                     break
-                await websocket.send_json(state)
+                await websocket.send_json(jsonable_encoder(state))
                 await asyncio.sleep(2)
             await websocket.close(code=4401)
         except (WebSocketDisconnect,RuntimeError):

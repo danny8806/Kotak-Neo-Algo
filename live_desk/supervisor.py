@@ -3,18 +3,20 @@
 REAL broker reports are authoritative for fills, orders, and net quantities.
 Never imports a prediction model or simulates trade fills. Actual order
 submission requires authenticated broker access, validated research,
-live Dhan prices, and an explicit per-session arming operation.
+live Dhan prices, and manual or explicitly configured automatic authorization.
 """
 from __future__ import annotations
-import hashlib, json, logging, os, threading
+import json, logging, os, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import replace
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from neo_api_client.exceptions import ApiException
+from requests import RequestException
 from sqlalchemy import select, text
-from bridge.app import reports, signal_batches
+from bridge.app import reports
 from scripts.validate_signals import validate
 from live_desk.dhan_data import DhanDataClient, DhanTokenSupervisor, IST
 from live_desk.dhan_instruments import fetch_dhan_symbols
@@ -23,16 +25,18 @@ from live_desk.kotak_auth import KotakSession
 from live_desk.kotak_instruments import load_kotak_equity_master, lookup_kotak_equity
 from live_desk.kotak_response import book_rows
 from live_desk.ledger import LiveLedger
-from live_desk.strategy import LATEST_ENTRY_CUTOFF, load_policy
+from live_desk.strategy import LATEST_ENTRY_CUTOFF, LATEST_EXIT_TIME, load_policy
 from live_desk.orb import opening_range
 from live_desk.runtime import MAX_ENTRY_TICK_AGE, LiveRuntime
 from live_desk.ticker import LiveTicker
 from live_desk import broker_view
 from live_desk.analytics import build_trade_journal
+from live_desk.nse_calendar import calendar_supported, is_regular_session
+from live_desk.research_contract import (FINAL_CUTOFF, FINAL_DEADLINE, PIPELINE_VERSION,
+                                         WATCHLIST_LOCK)
 
 LOG=logging.getLogger("news-kotak-live")
 FEED_WARMUP=time(9,14)
-WATCHLIST_LOCK=time(9,15)
 START=time(9,16)
 BOOK_REFRESH=timedelta(seconds=5)
 BOOK_EXPIRY=timedelta(seconds=20)
@@ -45,7 +49,9 @@ class LiveSupervisor:
         self.database=signal_engine
         self.allowed_symbols=set(allowed_symbols) if allowed_symbols is not None else None
         self.clock=clock or (lambda:datetime.now(IST))
-        self.policy=load_policy(Path(policy_path or Path(__file__).with_name("policy.json")))
+        self.policy=load_policy(Path(policy_path or Path(__file__).with_name("policy.json")),
+                                entry_quantity_cap=os.getenv("LIVE_ENTRY_QUANTITY_CAP", "").strip(),
+                                fixed_entry_quantity=os.getenv("LIVE_FIXED_ENTRY_QUANTITY", "").strip())
         ledger_database = ledger_path or os.getenv("LIVE_DATABASE_URL") or os.getenv("SIGNAL_DATABASE_URL")
         if not ledger_database:
             raise RuntimeError("Set LIVE_DATABASE_URL to a PostgreSQL connection URL")
@@ -53,7 +59,7 @@ class LiveSupervisor:
             raise RuntimeError("Live order ledger must use PostgreSQL")
         self.ledger=LiveLedger(ledger_database)
         stored=self.ledger.read_settings()
-        if stored:
+        if "entry_cutoff" in stored:
             self.policy=replace(self.policy, entry_cutoff=time.fromisoformat(stored["entry_cutoff"]),
                 exit_time=time.fromisoformat(stored["exit_time"]),
                 max_long=int(stored["max_long"]), max_short=int(stored["max_short"]),
@@ -68,6 +74,11 @@ class LiveSupervisor:
         self.master_fetch=master_fetch or fetch_dhan_symbols
         self.ticker_factory=ticker_factory or LiveTicker
         self.allowed=os.getenv("LIVE_ORDERS_ALLOWED","").strip()=="YES"
+        self.auto_trading=os.getenv("LIVE_AUTO_TRADING","").strip()=="YES"
+        if self.auto_trading and self.policy.fixed_entry_quantity != 1:
+            raise RuntimeError("Automatic trading requires fixed one-share sizing")
+        self.auto_paused_on=stored.get("auto_trading_paused_on")
+        self.auto_arm_error=None
         self.arm_secret=os.getenv("LIVE_ARM_TOTP_SECRET","")
         self.vix_security_id=os.getenv("DHAN_VIX_SECURITY_ID","21").strip()
         self.lock=threading.RLock()
@@ -80,6 +91,7 @@ class LiveSupervisor:
         self.report=None
         self.report_sha=None
         self.entry_watchlist=False
+        self.research_gate=None
         self.research_report=None
         self.research_dhan_ids={}
         self.session_date=None
@@ -140,8 +152,8 @@ class LiveSupervisor:
                 raise ValueError("Settings have invalid or missing values") from exc
             if cutoff>LATEST_ENTRY_CUTOFF:
                 raise ValueError("Entry cutoff cannot be later than 09:30 IST")
-            if not time(9,16)<proposed.entry_cutoff<proposed.exit_time<=time(15,30):
-                raise ValueError("Entry cutoff must follow 09:16 and precede the 15:30 exit limit")
+            if not time(9,16)<cutoff<exit_at<=LATEST_EXIT_TIME:
+                raise ValueError("Exit must follow the entry cutoff and be no later than 15:00 IST")
             if (not 1<=proposed.max_long<=5 or not 1<=proposed.max_short<=5 or
                 not 1<=proposed.max_positions<=10 or
                 proposed.max_positions>proposed.max_long+proposed.max_short):
@@ -164,50 +176,68 @@ class LiveSupervisor:
 
     def today_report(self):
         now=self.now()
+        regular=is_regular_session(now.date())
         lock_at=datetime.combine(now.date(), WATCHLIST_LOCK, tzinfo=IST)
+        gate={"status":"NO_REPORT" if regular else "NOT_A_REGULAR_NSE_SESSION"}
         with self.database.begin() as conn:
-            if now >= lock_at:
+            if regular and now >= lock_at:
                 # Wait for any pre-open ingest transaction to commit before freezing.
                 conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('signal-ingest'), hashtext(:day))"),
                              {"day": now.date().isoformat()})
             record=conn.execute(select(reports).where(
                 reports.c.session_date==now.date().isoformat())).mappings().first()
             if not record:
+                self.research_gate=gate
                 return None, None, False, None
             aggregate=json.loads(record["original_json"])
             data=aggregate
             digest=record["sha256"]
-            eligible=record["received_at"] < lock_at and data["status"]=="READY"
-            if not eligible and now.weekday()<5:
-                batches=conn.execute(select(signal_batches.c.original_json).where(
-                    signal_batches.c.session_date==now.date().isoformat(),
-                    signal_batches.c.received_at < lock_at,
-                ).order_by(signal_batches.c.id)).scalars()
-                signals={}
-                ready_batches=0
-                for raw in batches:
-                    batch=json.loads(raw)
-                    if batch["status"]!="READY":
-                        continue
-                    ready_batches+=1
-                    for item in batch["signals"]:
-                        prior=signals.setdefault(item["symbol"], item)
-                        if prior["side"]!=item["side"]:
-                            raise ValueError("Conflicting direction in pre-open watchlist")
-                    data=batch
-                if signals:
-                    if ready_batches>1:
-                        counts={"LONG":0,"SHORT":0}
-                        for item in signals.values():
-                            counts[item["side"]]+=1
-                            item["rank"]=counts[item["side"]]
-                        data={**data,"signals":list(signals.values())}
-                    raw=json.dumps(data,sort_keys=True,separators=(",",":"),ensure_ascii=False)
-                    digest=hashlib.sha256(raw.encode()).hexdigest()
-                    eligible=True
+            provenance=record.get("pipeline_version")
+            eligible=False
+            if not regular:
+                gate={"status":("NOT_A_REGULAR_NSE_SESSION" if calendar_supported(now.date())
+                                else "CALENDAR_UPDATE_REQUIRED"),
+                      "pipeline_version":provenance}
+            elif provenance != PIPELINE_VERSION:
+                gate={"status":"LEGACY_OR_UNVERIFIED_PRODUCER",
+                      "pipeline_version":provenance,"required":PIPELINE_VERSION}
+            elif record["received_at"] >= lock_at:
+                gate={"status":"RECEIVED_AFTER_LOCK","pipeline_version":provenance,
+                      "received_at":record["received_at"].isoformat()}
+            elif data["status"] != "READY":
+                gate={"status":"NOT_READY","pipeline_version":provenance}
+            else:
+                try:
+                    cutoff=datetime.fromisoformat(
+                        str(data["news_cutoff_at"]).replace("Z","+00:00")).astimezone(IST)
+                    generated=datetime.fromisoformat(
+                        str(data["generated_at"]).replace("Z","+00:00")).astimezone(IST)
+                except (KeyError,TypeError,ValueError):
+                    gate={"status":"INVALID_RESEARCH_TIMESTAMPS",
+                          "pipeline_version":provenance}
+                else:
+                    if cutoff.date()!=now.date() or generated.date()!=now.date():
+                        gate={"status":"RESEARCH_DATE_MISMATCH",
+                              "pipeline_version":provenance}
+                    elif cutoff.timetz().replace(tzinfo=None)>FINAL_CUTOFF:
+                        gate={"status":"CUTOFF_AFTER_0900","pipeline_version":provenance,
+                              "news_cutoff_at":cutoff.isoformat()}
+                    elif generated.timetz().replace(tzinfo=None)>FINAL_DEADLINE:
+                        gate={"status":"GENERATED_AFTER_0912","pipeline_version":provenance,
+                              "generated_at":generated.isoformat()}
+                    elif generated<cutoff:
+                        gate={"status":"GENERATED_BEFORE_CUTOFF",
+                              "pipeline_version":provenance}
+                    else:
+                        eligible=True
+                        gate={"status":"ELIGIBLE","pipeline_version":provenance,
+                              "news_cutoff_at":cutoff.isoformat(),
+                              "generated_at":generated.isoformat(),
+                              "received_at":record["received_at"].isoformat()}
+        self.research_gate=gate
         validate(data,expected_date=now.date().isoformat(),
-                 allowed_symbols=self.allowed_symbols)
-        return data,digest,eligible and now.weekday()<5,aggregate
+                 allowed_symbols=self.allowed_symbols,strict_final=eligible)
+        return data,digest,eligible,aggregate
 
     def _new_day(self,day):
         with self.lock:
@@ -226,6 +256,7 @@ class LiveSupervisor:
             self.report=None
             self.report_sha=None
             self.entry_watchlist=False
+            self.research_gate=None
             self.research_report=None
             self.research_dhan_ids={}
             self.dhan_ids={}
@@ -302,7 +333,7 @@ class LiveSupervisor:
     def _refresh_vix_context(self,now):
         if (not self.dhan or not self.dhan_auth or
             self.dhan_auth.snapshot().get("state")!="AUTHENTICATED" or
-            now.weekday()>=5 or not time(9,15)<=now.time()<self.policy.entry_cutoff):
+            not is_regular_session(now.date()) or not time(9,15)<=now.time()<self.policy.entry_cutoff):
             return
         if self.last_vix_attempt and now-self.last_vix_attempt<timedelta(seconds=20):return
         self.last_vix_attempt=now
@@ -380,7 +411,8 @@ class LiveSupervisor:
             self.research_dhan_ids.update(ids)
 
     def _warm_entry_feed(self,now):
-        if (self.stop_event.is_set() or not self.entry_watchlist or not self.dhan_ids or now.weekday()>=5 or
+        if (self.stop_event.is_set() or not self.entry_watchlist or not self.dhan_ids or
+                not is_regular_session(now.date()) or
                 not FEED_WARMUP<=now.time()<self.policy.entry_cutoff):
             return
         if self.ticker is None:
@@ -479,12 +511,20 @@ class LiveSupervisor:
         positions_job=self.preparation.submit(broker_view.positions,self.broker,current_quotes)
         cash_job=self.preparation.submit(self._broker_cash)
         try:
-            order_rows=book_rows(self.broker.order_report(),"orders")
-            trade_rows=book_rows(self.broker.trade_report(),"trades")
-        finally:
-            wait((positions_job,cash_job))
-        position=positions_job.result()
-        cash=cash_job.result()
+            try:
+                order_rows=book_rows(self.broker.order_report(),"orders")
+                trade_rows=book_rows(self.broker.trade_report(),"trades")
+            finally:
+                wait((positions_job,cash_job))
+            position=positions_job.result()
+            cash=cash_job.result()
+        except (ApiException, RequestException, ArithmeticError, RuntimeError, ValueError) as exc:
+            with self.lock:
+                self.last_book_at=None
+                if self.armed:
+                    self.disarm("Kotak account books unavailable")
+            LOG.warning("Kotak book refresh failed (%s)",type(exc).__name__)
+            return
         books=(order_rows,trade_rows)
         orders=broker_view.orders(self.broker,rows=order_rows)
         fills=broker_view.fills(self.broker,rows=trade_rows)
@@ -513,7 +553,7 @@ class LiveSupervisor:
         """Read-only ticks for account positions outside the signal watchlist."""
         symbols={row["symbol"] for row in self.broker_positions if row["net_quantity"]}
         symbols-=set(self.dhan_ids)
-        if not time(9,15)<=now.time()<time(15,30) or now.weekday()>=5:symbols=set()
+        if not time(9,15)<=now.time()<time(15,30) or not is_regular_session(now.date()):symbols=set()
         if not symbols:
             if self.position_ticker:self.position_ticker.stop()
             self.position_ticker=None;self.position_dhan_ids={}
@@ -550,7 +590,7 @@ class LiveSupervisor:
 
     def poll_ohlc(self):
         now=self.now()
-        if not self.dhan or not self.dhan_ids or now.weekday()>=5:
+        if not self.dhan or not self.dhan_ids or not is_regular_session(now.date()):
             return
         if not time(9,15)<=now.time()<self.policy.entry_cutoff:return
         if self.last_ohlc_at and now-self.last_ohlc_at<timedelta(seconds=20):
@@ -660,9 +700,13 @@ class LiveSupervisor:
             blocked.append("FRESH_QUOTES")
         if self.last_book_at is None or not timedelta(0)<=now-self.last_book_at<=BOOK_EXPIRY:
             blocked.append("BROKER_BOOKS")
-        if not START<=now.time()<self.policy.entry_cutoff or now.weekday()>=5:
+        if not START<=now.time()<self.policy.entry_cutoff or not is_regular_session(now.date()):
             blocked.append("MARKET_ENTRY_WINDOW")
-        if not self.available_cash or Decimal(self.available_cash)<self.policy.gross_cap:blocked.append("FUNDS")
+        # Fixed one-share operation delegates margin acceptance to Kotak. Full
+        # allocation sizing retains the existing cash-versus-gross-cap check.
+        if self.policy.fixed_entry_quantity is None and (
+                not self.available_cash or Decimal(self.available_cash)<self.policy.gross_cap):
+            blocked.append("FUNDS")
         if not self.runtime or self.runtime.errors:blocked.append("EXECUTION_RUNTIME")
         if self.error:blocked.append("SUPERVISOR_ERROR")
         if self.prior_session_recovery:blocked.append("PRIOR_SESSION_RECOVERY")
@@ -688,12 +732,30 @@ class LiveSupervisor:
             self.status="LIVE_ARMED"
         return {"armed":True,"day":now.date().isoformat()}
 
-    def disarm(self,reason="Operator disarmed new orders"):
+    def disarm(self,reason="Operator disarmed new orders",*,pause_automatic=False):
         with self.lock:
+            pause=(getattr(self,"auto_trading",False) and (pause_automatic or self.armed))
             self.armed=False
             if self.runtime:self.runtime.enabled=False
             self.status="DISARMED"
+            if pause:
+                self.auto_paused_on=self.now().date().isoformat()
+        if pause:
+            self.ledger.write_settings({"auto_trading_paused_on":self.auto_paused_on},self.now())
         LOG.warning("%s",reason)
+
+    def _maybe_auto_arm(self,now):
+        """Use explicit server authorization only after the normal live checks pass."""
+        if (not getattr(self,"auto_trading",False) or not self.allowed or self.armed or
+                self.auto_paused_on==now.date().isoformat() or
+                self.policy.fixed_entry_quantity != 1 or not self.ready()):
+            return
+        try:
+            self.arm()
+            self.auto_arm_error=None
+        except RuntimeError as exc:
+            # arm() still checks overlapping positions and unresolved intents.
+            self.auto_arm_error=str(exc)
 
     def _manage_authorized_exits(self,now):
         """Cancel working bot entries at cutoff and close confirmed fills at EOD.
@@ -701,7 +763,7 @@ class LiveSupervisor:
         A persisted bot entry is sufficient to recover these operations after a restart.
         Square-off also requires an exact match against the live broker position.
         """
-        if not self.allowed or now.time()<self.policy.entry_cutoff or now.weekday()>=5:
+        if not self.allowed or now.time()<self.policy.entry_cutoff or not is_regular_session(now.date()):
             return
         square_off=now.time()>=self.policy.exit_time
         if self.armed:
@@ -763,7 +825,7 @@ class LiveSupervisor:
         self._ensure_dhan_auth()
         # Off-session signals may arrive at any time and are mapped for the
         # dashboard. No ORB/feed starts outside the entry window.
-        if now.weekday()>=5:
+        if not is_regular_session(now.date()):
             self.blocked_stage="CURRENT_SESSION_SIGNALS"
             has_report=self._load_report()
             if not has_report:
@@ -834,7 +896,7 @@ class LiveSupervisor:
             self._refresh_vix_context(current)
         if self.armed and not self.ready():
             self.disarm("Broker or market data health degraded")
-        # Entries cannot be recreated after restart without manual arming.
+        self._maybe_auto_arm(current)
 
     def start(self):
         if self.thread and self.thread.is_alive():return
@@ -919,8 +981,12 @@ class LiveSupervisor:
                     "order_submission_enabled":bool(not entry_closed and self.armed and self.runtime),
                 },
                 "research_cutoff_at":self.report.get("news_cutoff_at") if self.report else None,
+                "research_gate":self.research_gate,
                 "report_hash":self.report_sha,"armed":self.armed,
                 "session_authorized":self.session_authorized,
+                "automatic_trading":{"enabled":getattr(self,"auto_trading",False),
+                    "paused_today":getattr(self,"auto_paused_on",None)==now.date().isoformat(),
+                    "error":getattr(self,"auto_arm_error",None)},
                 "orders_permitted_by_server":self.allowed,
                 "market_feed":ticker,"broker_connected":books_fresh,
                 "last_entry_quote_at":self.last_quote_at.isoformat() if self.last_quote_at else None,
@@ -939,6 +1005,8 @@ class LiveSupervisor:
                             "exit_time":self.policy.exit_time.isoformat(),
                             "allocation_per_position":str(self.policy.per_position),
                             "gross_cap":str(self.policy.gross_cap),
+                            "entry_quantity_cap":self.policy.entry_quantity_cap,
+                            "fixed_entry_quantity":self.policy.fixed_entry_quantity,
                             "max_long":self.policy.max_long,"max_short":self.policy.max_short,
                             "max_positions":self.policy.max_positions,
                             "tick_stop_pct":None},

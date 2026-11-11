@@ -35,6 +35,17 @@ for name in SIGNAL_BRIDGE_TOKEN DASHBOARD_PASSWORD DASHBOARD_SESSION_SECRET; do
     echo "BLOCKED: ${name} missing from server configuration" >&2; exit 3;
   }
 done
+# The sole production handoff is the internal SELECT-only news database read.
+# An external HTTP bridge is retired and must not be activated by this script.
+grep -Eq '^SIGNAL_INGEST_MODE=internal$' "$ENV_FILE" || {
+  echo "BLOCKED: SIGNAL_INGEST_MODE must be internal for production" >&2; exit 3;
+}
+grep -Eq '^INTERNAL_NEWS_DATABASE_URL=postgresql\+psycopg://.+@.+/[A-Za-z0-9_]+$' "$ENV_FILE" || {
+  echo "BLOCKED: INTERNAL_NEWS_DATABASE_URL (SELECT-only news DB) missing or invalid" >&2; exit 3;
+}
+grep -Eq 'SIGNAL_INGEST_MODE:[[:space:]]*\$\{SIGNAL_INGEST_MODE:-internal\}' "$COMPOSE" || {
+  echo "BLOCKED: Compose must default SIGNAL_INGEST_MODE to internal" >&2; exit 3;
+}
 grep -Eq '^POSTGRES_PASSWORD=[A-Za-z0-9_-]{32,}$' "$ENV_FILE" || {
   echo "BLOCKED: private URL-safe POSTGRES_PASSWORD is missing or invalid" >&2; exit 3;
 }
@@ -63,13 +74,35 @@ echo "Starting PostgreSQL and localhost:8010; existing 8004 service remains unto
 run_compose up -d
 
 verify() {
-  local n health status
+  local n health status token provenance
+  token="$(sed -n 's/^SIGNAL_BRIDGE_TOKEN=//p' "$ENV_FILE" | head -1)"
   for n in $(seq 1 35); do
     health="$(curl -fsS --max-time 3 http://127.0.0.1:$HOST_PORT/health 2>/dev/null || true)"
     if [[ "$health" == *'"mode":"LIVE_ONLY"'* && "$health" == *'"orders_armed":false'* ]]; then
+      [[ "$health" == *'"news_intake":{"mode":"VPS_INTERNAL"'* ]] || {
+        echo "BLOCKED: production must run the internal news intake, not an external/legacy mode" >&2
+        return 1
+      }
+      [[ "$health" != *'"status":"STARTING"'* && "$health" != *'"status":"INTAKE_BLOCKED"'* ]] || {
+        echo "BLOCKED: internal intake cannot read the private news database" >&2
+        return 1
+      }
       status="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$HOST_PORT/api/state || true)"
       [[ "$status" == "401" ]] || { echo "BLOCKED: API authentication check failed ($status)" >&2; return 1; }
-      echo "PASS: live-only mode, unauthenticated API rejected, orders DISARMED"
+      status="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data '{}' \
+        http://127.0.0.1:$HOST_PORT/api/v1/signals/incoming || true)"
+      [[ "$status" == "410" ]] || {
+        echo "BLOCKED: retired external signal route is not disabled ($status)" >&2
+        return 1
+      }
+      provenance="$(curl -fsS --max-time 3 -H "Authorization: Bearer $token" \
+        http://127.0.0.1:$HOST_PORT/api/v1/signals/status 2>/dev/null || true)"
+      [[ "$provenance" == *'"pipeline_version"'* ]] || {
+        echo "BLOCKED: signal provenance status is unavailable" >&2
+        return 1
+      }
+      echo "PASS: internal intake, provenance status, retired public route 410, orders DISARMED"
       return 0
     fi
     sleep 2

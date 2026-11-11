@@ -1,7 +1,7 @@
 # Project instructions
 
-Read [MAIN_PLAN.md](MAIN_PLAN.md) first. It is the sole current production plan.
+Read [MAIN_PLAN.md](MAIN_PLAN.md) before changing news scheduling, AI roles, stock selection, dashboard intake or deployment. It is the sole current plan.
 
-Use only VPS scheduler → Python/Codex/OpenCode → private news DB → Codex FINAL → internal dashboard intake → 09:15 stock lock. Do not restore local 09:02 publishing, GitHub scheduled news transport, public HTTP signal delivery, critic or heuristic stock selection.
+Use only the VPS pipeline specified there. Do not restore the retired local 09:02 automation, GitHub news schedules/inbox publishing, an external signal bridge, a separate critic or heuristic stock selection.
 
-Historical reports, old branches and diagrams are past evidence, not instructions. Preserve source/signal/order history and private credentials. Never submit live test orders.
+Historical reports and diagrams are evidence of past states, not current requirements. Preserve real source, signal, order and fill history. Never print credentials or infer live execution from tests. Do not send live orders for validation.

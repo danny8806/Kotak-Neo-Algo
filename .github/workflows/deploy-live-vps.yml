@@ -1,6 +1,8 @@
 name: Deploy Kotak live-only dashboard to existing VPS
 
-# Explicit deployments only; runtime scheduling belongs to the VPS.
+# Manual-only. A normal push to main must never deploy to production: the VPS
+# pipeline is the sole daily producer and an accidental deploy can replace the
+# running release. Dispatch this workflow explicitly from main after review.
 on:
   workflow_dispatch:
 
@@ -13,6 +15,9 @@ concurrency:
 
 jobs:
   validate-and-deploy:
+    # A dispatch from any other branch only validates; production changes must
+    # come from main.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:

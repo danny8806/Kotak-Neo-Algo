@@ -13,3 +13,5 @@ Everything in the runtime news path runs on the existing VPS. GitHub hosts sourc
 - Existing report schema: `schema/stock-signals.schema.json`.
 
 See MAIN_PLAN.md for clocks, direct-source news policy, exact mechanical gates, model quota handling, private database isolation and test requirements. Never print credentials or place live orders as a connectivity test.
+
+The existing dashboard is at https://deltacapitals.systems/kotak-live/ . Credentials remain private.

@@ -156,7 +156,7 @@
       "properties": {
         "symbol": {
           "type": "string",
-          "pattern": "^[A-Z][A-Z0-9&._-]{0,29}$"
+          "pattern": "^(?=[A-Z0-9&._-]*[A-Z])[A-Z0-9][A-Z0-9&._-]{0,29}$"
         },
         "side": {
           "enum": [

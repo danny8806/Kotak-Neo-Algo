@@ -155,12 +155,12 @@ class LiveTerminalTests(unittest.TestCase):
         self.login()
         headers={"Origin":"http://testserver"}
         payload={"per_position":"125500.25","max_positions":"3","gross_cap":"300000.25",
-                 "max_long":"2","max_short":"1","entry_cutoff":"09:27","exit_time":"15:10"}
+                 "max_long":"2","max_short":"1","entry_cutoff":"09:27","exit_time":"14:55"}
         response=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(response.status_code,200,response.text)
         expected={"allocation_per_position":"125500.25","gross_cap":"300000.25",
                   "max_positions":3,"max_long":2,"max_short":1,
-                  "entry_cutoff":"09:27:00","exit_time":"15:10:00"}
+                  "entry_cutoff":"09:27:00","exit_time":"14:55:00"}
         self.assertEqual(response.json()["strategy"],expected)
         restarted=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=self.clock,
                                  kotak_factory=lambda:self.broker)
@@ -185,7 +185,7 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertEqual(self.broker.order_calls,0)
         invalid=[
             {"max_long":"6"},{"max_positions":"4"},{"max_short":1.5},{"max_long":True},
-            {"entry_cutoff":"09:31"},{"exit_time":"09:25"},{"exit_time":"15:15+05:30"},
+            {"entry_cutoff":"09:31"},{"exit_time":"09:25"},{"exit_time":"15:00:01"},{"exit_time":"15:15+05:30"},
             {"gross_cap":"125500.24"},{"per_position":"125500.251"},{"per_position":"NaN"},
         ]
         for override in invalid:
@@ -197,11 +197,31 @@ class LiveTerminalTests(unittest.TestCase):
         locked=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(locked.status_code,400)
 
+        legacy = self.supervisor.ledger.read_settings()
+        self.supervisor.ledger.write_settings({**legacy, "exit_time": "15:15:00"}, TODAY)
+        migrated = LiveSupervisor(self.bridge.state.engine, ledger_path=self.db_url,
+                                  clock=self.clock, kotak_factory=lambda: self.broker)
+        self.addCleanup(migrated.ledger.close)
+        self.assertEqual(migrated.snapshot()["strategy"]["exit_time"], "15:00:00")
+
     def test_cross_origin_live_action_rejected(self):
         self.login()
         r=self.client.post("/api/live/disarm",headers={"Origin":"https://evil.example"})
         self.assertEqual(r.status_code,403)
         self.assertFalse(self.supervisor.armed)
+
+    def test_automatic_mode_logout_keeps_trading_and_stop_persists_daily_pause(self):
+        self.login()
+        self.supervisor.auto_trading=True
+        self.supervisor.armed=True
+        response=self.client.post('/api/auth/logout',headers={'Origin':'http://testserver'})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertTrue(self.supervisor.armed)
+        self.login()
+        response=self.client.post('/api/live/disarm',headers={'Origin':'http://testserver'})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertFalse(self.supervisor.armed)
+        self.assertEqual(self.supervisor.ledger.read_settings()['auto_trading_paused_on'],TODAY.date().isoformat())
 
     def test_websocket_rejects_cross_origin_even_with_login_cookie(self):
         self.login()
@@ -214,6 +234,65 @@ class LiveTerminalTests(unittest.TestCase):
         self.login()
         with self.client.websocket_connect("/ws", headers={"Origin":"http://testserver"}) as ws:
             self.assertEqual(ws.receive_json()["mode"], "LIVE_KOTAK_NEO_ONLY")
+
+    def insert_current_report(self,*,pipeline_version,cutoff="2026-11-04T09:00:00+05:30",
+                              generated="2026-11-04T09:03:00+05:30",key="provenance-test",
+                              received=None):
+        report={"schema_version":"1.0","status":"READY","market":"NSE",
+            "timezone":"Asia/Kolkata","session_date":"2026-11-04",
+            "news_cutoff_at":cutoff,"generated_at":generated,"execution_enabled":False,
+            "signals":[{"symbol":"TESTA","side":"LONG","rank":1,
+                "reason":"Verified company event supports positive directional bias.",
+                "news_summary":"A verified company filing provides a positive catalyst.",
+                "first_available_at":"2026-11-03T16:00:00+05:30",
+                "sources":[{"url":"https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+                    "title":"Issuer filing","published_at":"2026-11-03T16:00:00+05:30"}]}]}
+        raw=json.dumps(report,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+        with self.bridge.state.engine.begin() as db:
+            db.execute(reports.insert().values(session_date="2026-11-04",
+                idempotency_key=key,sha256=hashlib.sha256(raw.encode()).hexdigest(),
+                status="READY",received_at=received or TODAY.replace(minute=14),
+                original_json=raw,pipeline_version=pipeline_version))
+        return report
+
+    def test_legacy_producer_never_enters_the_executable_watchlist(self):
+        self.insert_current_report(pipeline_version=None,key="legacy-provenance")
+        report,sha,eligible,_=self.supervisor.today_report()
+        self.assertIsNotNone(report)
+        self.assertFalse(eligible)
+        self.assertEqual(self.supervisor.research_gate["status"],
+                         "LEGACY_OR_UNVERIFIED_PRODUCER")
+
+    def test_current_producer_before_lock_is_eligible(self):
+        self.insert_current_report(pipeline_version="vps-codex-final-v1",key="current-provenance")
+        report,sha,eligible,_=self.supervisor.today_report()
+        self.assertTrue(eligible)
+        self.assertEqual(self.supervisor.research_gate["status"],"ELIGIBLE")
+
+    def test_late_final_cutoff_is_not_eligible(self):
+        self.insert_current_report(pipeline_version="vps-codex-final-v1",key="late-cutoff",
+            cutoff="2026-11-04T09:05:00+05:30",generated="2026-11-04T09:06:00+05:30")
+        report,sha,eligible,_=self.supervisor.today_report()
+        self.assertFalse(eligible)
+        self.assertEqual(self.supervisor.research_gate["status"],"CUTOFF_AFTER_0900")
+
+    def test_generation_after_0912_is_not_eligible(self):
+        self.insert_current_report(pipeline_version="vps-codex-final-v1",key="late-generation",
+            cutoff="2026-11-04T09:00:00+05:30",generated="2026-11-04T09:13:00+05:30")
+        report,sha,eligible,_=self.supervisor.today_report()
+        self.assertFalse(eligible)
+        self.assertEqual(self.supervisor.research_gate["status"],"GENERATED_AFTER_0912")
+
+    def test_websocket_serializes_date_and_decimal_fields(self):
+        self.login()
+        original=self.supervisor.snapshot
+        self.supervisor.snapshot=lambda:{"mode":"LIVE_KOTAK_NEO_ONLY",
+            "session_date":date(2026,11,4),"created_at":TODAY,"amount":Decimal("1.25")}
+        self.addCleanup(setattr,self.supervisor,"snapshot",original)
+        with self.client.websocket_connect("/ws",headers={"Origin":"http://testserver"}) as ws:
+            payload=ws.receive_json()
+        self.assertEqual(payload["session_date"],"2026-11-04")
+        self.assertEqual(payload["amount"],1.25)
 
     def test_midnight_expires_an_already_connected_dashboard_websocket(self):
         self.login()
@@ -249,7 +328,7 @@ class LiveTerminalTests(unittest.TestCase):
             db.execute(reports.insert().values(session_date="2026-11-07",
                 idempotency_key="off-session-dhan-map-test",
                 sha256=hashlib.sha256(raw.encode()).hexdigest(),status="READY",
-                received_at=now,original_json=raw))
+                received_at=now,original_json=raw,pipeline_version="vps-codex-final-v1"))
 
         class Dhan:
             token="test-authenticated-token"
@@ -293,7 +372,7 @@ class LiveTerminalTests(unittest.TestCase):
             db.execute(reports.insert().values(session_date="2026-11-06",
                 idempotency_key="after-cutoff-dhan-map-test",
                 sha256=hashlib.sha256(raw.encode()).hexdigest(),status="READY",
-                received_at=now,original_json=raw))
+                received_at=now,original_json=raw,pipeline_version="vps-codex-final-v1"))
 
         class Dhan:
             token="test-authenticated-token"
@@ -317,48 +396,44 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertFalse(desk.armed)
         self.assertEqual(self.broker.order_calls,0)
 
-    def test_exact_cutoff_preserves_preopen_watchlist_on_restart(self):
+    def test_lock_preserves_the_final_watchlist_on_restart(self):
         from test_failure_cases import ready_fixture
 
-        now=[TODAY.replace(hour=9,minute=14,second=59)]
+        report=ready_fixture("2026-11-04")
+        report["news_cutoff_at"]="2026-11-04T09:00:00+05:30"
+        report["generated_at"]="2026-11-04T09:03:00+05:30"
+        published_at="2026-11-03T16:15:00+05:30"
+        report["signals"][0].update(symbol="TESTA",side="LONG",
+                                    first_available_at=published_at)
+        report["signals"][0]["sources"][0]["published_at"]=published_at
+        raw=json.dumps(report,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+        digest=hashlib.sha256(raw.encode()).hexdigest()
+        with self.bridge.state.engine.begin() as db:
+            db.execute(reports.insert().values(session_date="2026-11-04",
+                idempotency_key="final-lock-restart-test",sha256=digest,status="READY",
+                received_at=TODAY.replace(hour=9,minute=14,second=59),original_json=raw,
+                pipeline_version="vps-codex-final-v1"))
+
+        now=[TODAY.replace(hour=9,minute=16)]
         self.supervisor.clock=lambda:now[0]
-        self.supervisor.allowed_symbols={"TESTA","TESTB","TESTC"}
-        app=create_app(database_url=self.db_url,bearer_token=TOKEN,
-                       now_provider=lambda:now[0],allowed_symbols=self.supervisor.allowed_symbols)
-        self.addCleanup(app.state.engine.dispose)
-        with TestClient(app) as client:
-            def ingest(symbol,side):
-                report=ready_fixture(now[0].date().isoformat())
-                published_at=(now[0].date()-timedelta(days=1)).isoformat()+"T16:15:00+05:30"
-                report["signals"][0].update(symbol=symbol,side=side,first_available_at=published_at)
-                report["signals"][0]["sources"][0]["published_at"]=published_at
-                response=client.post("/api/v1/signals/incoming",json=report,headers={
-                    "Authorization":"Bearer "+TOKEN,"Idempotency-Key":"fixture-"+symbol})
-                self.assertEqual(response.status_code,200,response.text)
-                return response.json()
+        self.assertTrue(self.supervisor._load_report())
+        state=self.supervisor.snapshot()
+        self.assertTrue(state["watchlist_locked"])
+        self.assertEqual(state["report_hash"],digest)
+        self.assertEqual([(s["symbol"],s["side"],s["entry_eligible"]) for s in state["signals"]],
+                         [("TESTA","LONG",True)])
+        self.assertIsNone(self.supervisor.runtime)
 
-            first=ingest("TESTA","LONG")
-            now[0]+=timedelta(seconds=1)
-            self.assertEqual(ingest("TESTB","SHORT")["status"],"ACCEPTED")
-            now[0]+=timedelta(minutes=1)
-            # Load from PostgreSQL for the first time after both reports landed.
-            self.assertTrue(self.supervisor._load_report())
-            state=self.supervisor.snapshot()
-            self.assertTrue(state["watchlist_locked"])
-            self.assertEqual(state["report_hash"],first["sha256"])
-            self.assertEqual([(s["symbol"],s["side"],s["entry_eligible"]) for s in state["signals"]],
-                             [("TESTA","LONG",True),("TESTB","SHORT",False)])
-            self.assertIsNone(self.supervisor.runtime)
-
-            now[0]+=timedelta(days=1)
-            self.supervisor._new_day(now[0].date().isoformat())
-            self.assertEqual(ingest("TESTC","LONG")["status"],"ACCEPTED")
-            self.assertTrue(self.supervisor._load_report())
-            self.supervisor._build_runtime()
-            state=self.supervisor.snapshot()
-            self.assertEqual(state["supervisor_status"],"LATE_RESEARCH_ONLY")
-            self.assertIn("CURRENT_SESSION_SIGNALS",state["readiness_blockers"])
-            self.assertIsNone(self.supervisor.ticker)
+        now[0]=TODAY.replace(hour=9,minute=17)
+        restarted=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,
+                                 clock=lambda:now[0],allowed_symbols={"TESTA"})
+        self.addCleanup(restarted.ledger.close)
+        self.assertTrue(restarted._load_report())
+        restarted_state=restarted.snapshot()
+        self.assertTrue(restarted_state["watchlist_locked"])
+        self.assertEqual(restarted_state["report_hash"],digest)
+        self.assertEqual([(s["symbol"],s["side"],s["entry_eligible"])
+                          for s in restarted_state["signals"]],[("TESTA","LONG",True)])
 
     def test_missing_kotak_configuration_is_quiet_and_disarmed(self):
         keys=("KOTAK_NEO_CONSUMER_KEY","KOTAK_NEO_MOBILE_NUMBER","KOTAK_NEO_UCC",
@@ -394,7 +469,8 @@ class LiveTerminalTests(unittest.TestCase):
         with self.bridge.state.engine.begin() as db:
             db.execute(reports.insert().values(session_date="2026-11-04",
                 idempotency_key="dhan-orb-monitor-test",sha256=hashlib.sha256(raw.encode()).hexdigest(),
-                status="READY",received_at=TODAY.replace(minute=14),original_json=raw))
+                status="READY",received_at=TODAY.replace(minute=14),original_json=raw,
+                pipeline_version="vps-codex-final-v1"))
 
         class Dhan:
             token="test-authenticated-token"
@@ -593,7 +669,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
         instruments={s:KotakInstrument(s,s+"-EQ",str(i+100)) for i,s in enumerate(symbols)}
         ranges={s:(Decimal("100"),Decimal("95")) for s in symbols}
         custom_policy=LivePolicy(time(10),time(15,15),10,10,20,
-            Decimal("50000"),Decimal("1000000"),"start")
+            Decimal("50000"),Decimal("1000000"),"start",entry_quantity_cap=1)
         runtime=LiveRuntime(session_date=date(2026,11,4),signals=signals,dhan_ids=ids,
             kotak_instruments=instruments,opening_ranges=ranges,policy=custom_policy,
             ledger=self.ledger,broker=FakeBroker(),enabled=True,clock=lambda:TODAY)
@@ -624,7 +700,8 @@ class KotakOrderSafetyTests(unittest.TestCase):
             self.assertEqual(len(entries),20)
             self.assertTrue(all(x["state"]=="FILLED" for x in entries))
             entries_in_parallel["enabled"]=False
-            exit_at=TODAY.replace(hour=15,minute=15)
+            exit_at=TODAY.replace(hour=15,minute=0)
+            self.assertEqual(runtime.exit_due(exit_at - timedelta(microseconds=1)), [])
             exits=runtime.exit_due(exit_at)
             self.assertEqual(len(exits),20)
             restarted=LiveRuntime(session_date=date(2026,11,4),signals=signals,dhan_ids=ids,
@@ -635,11 +712,12 @@ class KotakOrderSafetyTests(unittest.TestCase):
             self.assertEqual(restarted.exit_due(exit_at),[])
             rows=restarted.ledger.snapshot(TODAY.date())
             self.assertEqual(sum(x["phase"]=="EXIT" for x in rows),20)
-            self.assertTrue(all(x["state"]=="FILLED" for x in rows))
+            self.assertTrue(all(x["state"]=="FILLED" and x["quantity"]==1 for x in rows))
 
     def test_thirty_simultaneous_breakouts_with_duplicates_reserve_at_most_ten_entries(self):
         """Sixty simultaneous ticks across 30 stocks cannot exceed the 5+5 cap."""
         from concurrent.futures import ThreadPoolExecutor
+        from dataclasses import replace
         from threading import Barrier
         symbols=[f"LONG{i}" for i in range(1,16)]+[f"SHORT{i}" for i in range(1,16)]
         signals=[{"symbol":s,"side":"LONG" if s.startswith("LONG") else "SHORT"} for s in symbols]
@@ -647,12 +725,12 @@ class KotakOrderSafetyTests(unittest.TestCase):
         instruments={s:KotakInstrument(s,s+"-EQ",str(i+100)) for i,s in enumerate(symbols)}
         ranges={s:(Decimal("100"),Decimal("95")) for s in symbols}
         runtime=LiveRuntime(session_date=TODAY.date(),signals=signals,dhan_ids=ids,
-            kotak_instruments=instruments,opening_ranges=ranges,policy=self.policy,
+            kotak_instruments=instruments,opening_ranges=ranges,policy=replace(self.policy, entry_quantity_cap=1),
             ledger=self.ledger,broker=FakeBroker(),enabled=True,clock=lambda:TODAY)
         self.addCleanup(runtime.close)
         submit_tags=[]
         def submit(_broker,instrument,side,quantity,tag):
-            submit_tags.append((instrument.symbol,tag))
+            submit_tags.append((instrument.symbol,tag,quantity))
             return {"broker_order_id":"OID-"+tag,"tag":tag,"requires_reconciliation":True}
         def reconcile(_broker,tag):
             row=next(x for x in self.ledger.snapshot(TODAY.date()) if x["tag"]==tag)
@@ -682,7 +760,8 @@ class KotakOrderSafetyTests(unittest.TestCase):
         self.assertEqual(sum(row["side"]=="BUY" for row in rows),5)
         self.assertEqual(sum(row["side"]=="SELL" for row in rows),5)
         self.assertEqual(len(submit_tags),10)
-        self.assertEqual(set(submit_tags), {(row["symbol"], row["tag"]) for row in rows})
+        self.assertTrue(all(row["quantity"] == 1 for row in rows))
+        self.assertEqual(set(submit_tags), {(row["symbol"], row["tag"], 1) for row in rows})
         self.assertTrue(all(row["state"]=="FILLED" for row in rows))
 
     def test_independent_ledger_workers_serialize_position_caps_without_deadlock(self):
