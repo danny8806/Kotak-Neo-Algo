@@ -1,20 +1,7 @@
 name: Deploy Kotak live-only dashboard to existing VPS
 
+# Explicit deployments only; runtime scheduling belongs to the VPS.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'ops/**'
-      - 'tests/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'live_desk/**'
-      - 'bridge/**'
-      - 'scripts/validate_signals.py'
-      - 'requirements-live.txt'
-      - 'requirements-live-test.txt'
-      - 'requirements-bridge.txt'
-      - '.github/workflows/deploy-live-vps.yml'
   workflow_dispatch:
 
 permissions:
