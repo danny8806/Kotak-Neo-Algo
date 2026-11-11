@@ -1,6 +1,6 @@
 # VPS internal news-to-dashboard release — 11 November 2026
 
-Status at **13:55 IST**. This report records what was actually deployed and
+Status at **14:00 IST**. This report records what was actually deployed and
 verified on the VPS. It supersedes the 12:07 audit and the 12:13 recheck. The
 sole plan is [MAIN_PLAN.md](../MAIN_PLAN.md).
 
@@ -138,10 +138,25 @@ Spool recovery and current state:
   16,765 observations, 1 batch committed, 0 pending. Two consecutive scheduled
   runs now prove a stable heartbeat, not just a manual run.
 
-Intraday runs report `opencode: SKIPPED_BUDGET` and `codex: SKIPPED_BUDGET`
-because source collection already consumes the 300 s job budget. Final selection
-is a separate 4-minute `run-news-job.sh morning` service on the 09:00/09:05/09:10
-timer, so this does not replace or disable the FINAL job.
+Intraday runs at :10, :40 and :50 report `opencode: SKIPPED_BUDGET` and
+`codex: SKIPPED_BUDGET` because model slots are only claimable in the first ten
+minutes of each half hour (`model_slot`), not because collection used the whole
+budget. The :00 and :30 runs are the eligible slots; source collection continues
+every ten minutes. Final selection is a separate 4-minute `run-news-job.sh
+morning` service on the 09:00/09:05/09:10 timer, so this does not replace or
+disable the FINAL job.
+
+Actual model evidence from the 11:32 IST slot (`news_source_checks`, kind
+`ai_cli`):
+
+- OpenCode CLI: `QUOTA_LIMIT`, HTTP 429, 0 items, model
+  `opencode/deepseek-v4.1-flash-free`, provider reset recorded as
+  `2026-11-12T00:00:00Z`.
+- Codex CLI: `NO_VERIFIED_RESULTS`, 0 items. No Codex model ID is recorded in
+  the audit.
+
+Both lanes ran and failed closed with zero records. They did not fabricate
+candidates and did not block the Python collection lane.
 
 ## 6. Test evidence
 
@@ -158,9 +173,10 @@ fills or profitability.
 
 - No verified `vps-codex-final-v1` report exists yet; the first possible one is
   tomorrow's FINAL run. Today's dashboard correctly rejects the legacy report.
-- Codex/OpenCode quota remains unverified. Codex returned `NO_VERIFIED_RESULTS`
-  during the audit and no model ID is recorded. The FINAL job fails closed rather
-  than fabricating a selection.
+- OpenCode is quota-blocked until `2026-11-12T00:00:00Z` (HTTP 429, free-model
+  limit); Codex returned `NO_VERIFIED_RESULTS` with no model ID evidenced. Both
+  lanes failed closed with zero records rather than inventing candidates. The
+  FINAL job must do the same if quota is still unavailable.
 - Five sources failed and three were blocked in the reference run; registered
   routes are not a coverage guarantee.
 - The NSE holiday calendar covers 2026 only and fails closed after that; it must
