@@ -51,7 +51,7 @@ class LiveSupervisor:
         self.clock=clock or (lambda:datetime.now(IST))
         self.policy=load_policy(Path(policy_path or Path(__file__).with_name("policy.json")),
                                 entry_quantity_cap=os.getenv("LIVE_ENTRY_QUANTITY_CAP", "").strip(),
-                                fixed_entry_quantity=os.getenv("LIVE_FIXED_ENTRY_QUANTITY", "").strip())
+                                fixed_entry_quantity=os.getenv("LIVE_FIXED_ENTRY_QUANTITY", "2").strip())
         ledger_database = ledger_path or os.getenv("LIVE_DATABASE_URL") or os.getenv("SIGNAL_DATABASE_URL")
         if not ledger_database:
             raise RuntimeError("Set LIVE_DATABASE_URL to a PostgreSQL connection URL")
@@ -64,7 +64,9 @@ class LiveSupervisor:
                 exit_time=time.fromisoformat(stored["exit_time"]),
                 max_long=int(stored["max_long"]), max_short=int(stored["max_short"]),
                 max_positions=int(stored["max_positions"]),
-                per_position=Decimal(stored["per_position"]), gross_cap=Decimal(stored["gross_cap"]))
+                per_position=Decimal(stored["per_position"]), gross_cap=Decimal(stored["gross_cap"]),
+                fixed_entry_quantity=(None if stored.get('sizing_mode')=='capital' else
+                                      int(stored.get('fixed_entry_quantity', self.policy.fixed_entry_quantity or 2))))
         self.dhan_factory=dhan_factory or DhanDataClient.from_environment
         self.dhan_auth=None
         self.kotak_factory=kotak_factory or (lambda:login_kotak(KotakCredentials.from_environment()))
@@ -75,8 +77,6 @@ class LiveSupervisor:
         self.ticker_factory=ticker_factory or LiveTicker
         self.allowed=os.getenv("LIVE_ORDERS_ALLOWED","").strip()=="YES"
         self.auto_trading=os.getenv("LIVE_AUTO_TRADING","").strip()=="YES"
-        if self.auto_trading and self.policy.fixed_entry_quantity != 1:
-            raise RuntimeError("Automatic trading requires fixed one-share sizing")
         self.auto_paused_on=stored.get("auto_trading_paused_on")
         self.auto_arm_error=None
         self.arm_secret=os.getenv("LIVE_ARM_TOTP_SECRET","")
@@ -147,7 +147,14 @@ class LiveSupervisor:
                     entry_cutoff=cutoff, exit_time=exit_at,
                     **{name:int(value) for name,value in counts.items()},
                     per_position=Decimal(str(payload["per_position"])),
-                    gross_cap=Decimal(str(payload["gross_cap"])))
+                    gross_cap=Decimal(str(payload.get("gross_cap",self.policy.gross_cap))),
+                    fixed_entry_quantity=(None if payload.get('sizing_mode')=='capital' else
+                        int(str(payload.get('fixed_entry_quantity',self.policy.fixed_entry_quantity or 2)))))
+                if payload.get('sizing_mode','quantity') not in {'quantity','capital'}:
+                    raise ValueError('Sizing mode must be quantity or capital')
+                raw_quantity=str(payload.get('fixed_entry_quantity',self.policy.fixed_entry_quantity or 2))
+                if proposed.fixed_entry_quantity is not None and (not raw_quantity.isascii() or not raw_quantity.isdecimal()):
+                    raise ValueError('Quantity must be a positive whole number')
             except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
                 raise ValueError("Settings have invalid or missing values") from exc
             if cutoff>LATEST_ENTRY_CUTOFF:
@@ -159,16 +166,17 @@ class LiveSupervisor:
                 proposed.max_positions>proposed.max_long+proposed.max_short):
                 raise ValueError("Position limits must fit within up to 5 LONG and 5 SHORT signals")
             if (not proposed.per_position.is_finite() or not proposed.gross_cap.is_finite() or
-                proposed.per_position<Decimal("1000") or proposed.per_position>Decimal("20000000") or
-                proposed.gross_cap<proposed.per_position or proposed.gross_cap>Decimal("100000000")):
-                raise ValueError("Use at least ₹1,000 per stock and a gross cap that covers one allocation")
+                proposed.per_position<=0 or proposed.per_position>Decimal("20000000")):
+                raise ValueError("Capital per stock must be a positive amount")
             if any(value != value.quantize(Decimal("0.01"))
                    for value in (proposed.per_position, proposed.gross_cap)):
                 raise ValueError("Capital amounts must have no more than two decimal places")
             values={"entry_cutoff":proposed.entry_cutoff.isoformat(),"exit_time":proposed.exit_time.isoformat(),
                 "max_long":str(proposed.max_long),"max_short":str(proposed.max_short),
                 "max_positions":str(proposed.max_positions),"per_position":str(proposed.per_position),
-                "gross_cap":str(proposed.gross_cap)}
+                "gross_cap":str(proposed.gross_cap),
+                "sizing_mode":"capital" if proposed.fixed_entry_quantity is None else "quantity",
+                "fixed_entry_quantity":str(proposed.fixed_entry_quantity or '')}
             self.ledger.write_settings(values,self.now())
             self.policy=proposed
             if self.runtime:self.runtime.policy=proposed
@@ -219,10 +227,10 @@ class LiveSupervisor:
                     if cutoff.date()!=now.date() or generated.date()!=now.date():
                         gate={"status":"RESEARCH_DATE_MISMATCH",
                               "pipeline_version":provenance}
-                    elif cutoff.timetz().replace(tzinfo=None)>FINAL_CUTOFF:
-                        gate={"status":"CUTOFF_AFTER_0900","pipeline_version":provenance,
+                    elif cutoff.timetz().replace(tzinfo=None)>=FINAL_CUTOFF:
+                        gate={"status":"CUTOFF_AFTER_DECISION_DEADLINE","pipeline_version":provenance,
                               "news_cutoff_at":cutoff.isoformat()}
-                    elif generated.timetz().replace(tzinfo=None)>FINAL_DEADLINE:
+                    elif generated.timetz().replace(tzinfo=None)>=FINAL_DEADLINE:
                         gate={"status":"GENERATED_AFTER_0912","pipeline_version":provenance,
                               "generated_at":generated.isoformat()}
                     elif generated<cutoff:
@@ -509,15 +517,19 @@ class LiveSupervisor:
                     current_quotes[symbol]=dict(q)
         observed_at=self.now()
         positions_job=self.preparation.submit(broker_view.positions,self.broker,current_quotes)
-        cash_job=self.preparation.submit(self._broker_cash)
+        cash_job=getattr(self,'_cash_job',None)
+        if cash_job is None or cash_job.done():
+            cash_job=self.preparation.submit(self._broker_cash)
+            self._cash_job=cash_job
         try:
             try:
                 order_rows=book_rows(self.broker.order_report(),"orders")
                 trade_rows=book_rows(self.broker.trade_report(),"trades")
             finally:
-                wait((positions_job,cash_job))
+                wait((positions_job,))
             position=positions_job.result()
-            cash=cash_job.result()
+            try:cash=cash_job.result(timeout=0.25)
+            except (TimeoutError,ApiException,RequestException,ArithmeticError,RuntimeError,ValueError):cash=None
         except (ApiException, RequestException, ArithmeticError, RuntimeError, ValueError) as exc:
             with self.lock:
                 self.last_book_at=None
@@ -543,7 +555,7 @@ class LiveSupervisor:
             self.broker_positions=position
             self.broker_orders=orders
             self.broker_fills=fills
-            self.available_cash=str(cash)
+            self.available_cash=str(cash) if cash is not None else None
             self.prior_session_recovery=prior_recovery
             self.last_book_at=observed_at
             if self.status!="MONITORING_LIVE":self.status="BROKER_CONNECTED"
@@ -702,9 +714,9 @@ class LiveSupervisor:
             blocked.append("BROKER_BOOKS")
         if not START<=now.time()<self.policy.entry_cutoff or not is_regular_session(now.date()):
             blocked.append("MARKET_ENTRY_WINDOW")
-        # Fixed one-share operation delegates margin acceptance to Kotak. Full
-        # allocation sizing retains the existing cash-versus-gross-cap check.
-        if self.policy.fixed_entry_quantity is None and (
+        # Both configured sizing modes delegate balance/margin acceptance to
+        # Kotak. Legacy capital enforcement is disabled in the live policy.
+        if self.policy.enforce_capital_limits and (
                 not self.available_cash or Decimal(self.available_cash)<self.policy.gross_cap):
             blocked.append("FUNDS")
         if not self.runtime or self.runtime.errors:blocked.append("EXECUTION_RUNTIME")
@@ -719,7 +731,7 @@ class LiveSupervisor:
         now=self.now()
         with self.lock:
             if not self._health_check_locked(now):
-                raise RuntimeError("Live orders cannot arm: feeds, broker, funds or session not verified")
+                raise RuntimeError("Live orders cannot arm: feeds, broker or session not ready")
             if any(x["net_quantity"]!=0 and x["symbol"] in self.dhan_ids
                    for x in self.broker_positions):
                 raise RuntimeError("Existing Kotak holdings/positions overlap selected symbols")
@@ -748,7 +760,7 @@ class LiveSupervisor:
         """Use explicit server authorization only after the normal live checks pass."""
         if (not getattr(self,"auto_trading",False) or not self.allowed or self.armed or
                 self.auto_paused_on==now.date().isoformat() or
-                self.policy.fixed_entry_quantity != 1 or not self.ready()):
+                not self.ready()):
             return
         try:
             self.arm()
@@ -1007,6 +1019,8 @@ class LiveSupervisor:
                             "gross_cap":str(self.policy.gross_cap),
                             "entry_quantity_cap":self.policy.entry_quantity_cap,
                             "fixed_entry_quantity":self.policy.fixed_entry_quantity,
+                            "sizing_mode":"capital" if self.policy.fixed_entry_quantity is None else "quantity",
+                            "capital_balance_gate":False,
                             "max_long":self.policy.max_long,"max_short":self.policy.max_short,
                             "max_positions":self.policy.max_positions,
                             "tick_stop_pct":None},

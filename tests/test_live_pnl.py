@@ -265,6 +265,6 @@ class PnlSnapshotTests(unittest.TestCase):
         self.desk.refresh_broker();state=self.desk.snapshot()
         self.assertTrue(state['broker_connected'])
         self.assertEqual(state['available_cash'],'-1.00')
-        self.assertIn('FUNDS',state['readiness_blockers'])
+        self.assertNotIn('FUNDS',state['readiness_blockers'])
         self.assertEqual(state['positions'][0]['net_quantity'],3)
         self.assertFalse(state['readiness']);self.assertEqual(self.broker.order_calls,0)

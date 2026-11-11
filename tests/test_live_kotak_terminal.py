@@ -154,13 +154,13 @@ class LiveTerminalTests(unittest.TestCase):
     def test_live_settings_are_authenticated_validated_persistent_and_disarmed_only(self):
         self.login()
         headers={"Origin":"http://testserver"}
-        payload={"per_position":"125500.25","max_positions":"3","gross_cap":"300000.25",
+        payload={"per_position":"125500.25","max_positions":"3","gross_cap":"300000.25","sizing_mode":"capital",
                  "max_long":"2","max_short":"1","entry_cutoff":"09:27","exit_time":"14:55"}
         response=self.client.post("/api/live/settings",headers=headers,json=payload)
         self.assertEqual(response.status_code,200,response.text)
         expected={"allocation_per_position":"125500.25","gross_cap":"300000.25",
                   "max_positions":3,"max_long":2,"max_short":1,
-                  "entry_cutoff":"09:27:00","exit_time":"14:55:00"}
+                  "entry_cutoff":"09:27:00","exit_time":"14:55:00","sizing_mode":"capital","fixed_entry_quantity":None}
         self.assertEqual(response.json()["strategy"],expected)
         restarted=LiveSupervisor(self.bridge.state.engine,ledger_path=self.db_url,clock=self.clock,
                                  kotak_factory=lambda:self.broker)
@@ -186,7 +186,7 @@ class LiveTerminalTests(unittest.TestCase):
         invalid=[
             {"max_long":"6"},{"max_positions":"4"},{"max_short":1.5},{"max_long":True},
             {"entry_cutoff":"09:31"},{"exit_time":"09:25"},{"exit_time":"15:00:01"},{"exit_time":"15:15+05:30"},
-            {"gross_cap":"125500.24"},{"per_position":"125500.251"},{"per_position":"NaN"},
+            {"per_position":"125500.251"},{"per_position":"NaN"},{"sizing_mode":"unknown"},
         ]
         for override in invalid:
             with self.subTest(override=override):
@@ -269,12 +269,12 @@ class LiveTerminalTests(unittest.TestCase):
         self.assertTrue(eligible)
         self.assertEqual(self.supervisor.research_gate["status"],"ELIGIBLE")
 
-    def test_late_final_cutoff_is_not_eligible(self):
+    def test_actual_retry_cutoff_before_deadline_is_eligible(self):
         self.insert_current_report(pipeline_version="vps-codex-final-v1",key="late-cutoff",
             cutoff="2026-11-04T09:05:00+05:30",generated="2026-11-04T09:06:00+05:30")
         report,sha,eligible,_=self.supervisor.today_report()
-        self.assertFalse(eligible)
-        self.assertEqual(self.supervisor.research_gate["status"],"CUTOFF_AFTER_0900")
+        self.assertTrue(eligible)
+        self.assertEqual(self.supervisor.research_gate["status"],"ELIGIBLE")
 
     def test_generation_after_0912_is_not_eligible(self):
         self.insert_current_report(pipeline_version="vps-codex-final-v1",key="late-generation",
@@ -307,6 +307,20 @@ class LiveTerminalTests(unittest.TestCase):
     def test_missing_news_never_triggers_kotak_order(self):
         self.supervisor.cycle()
         self.assertIsNone(self.supervisor.runtime)
+        self.assertEqual(self.broker.order_calls,0)
+
+    def test_two_share_setting_persists_and_capital_has_no_minimum_gross_requirement(self):
+        self.login();headers={'Origin':'http://testserver'}
+        payload={'per_position':'0.50','gross_cap':'1','max_positions':'10','max_long':'5','max_short':'5',
+                 'entry_cutoff':'09:30','exit_time':'15:00','sizing_mode':'quantity','fixed_entry_quantity':'2'}
+        response=self.client.post('/api/live/settings',headers=headers,json=payload)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['strategy']['fixed_entry_quantity'],2)
+        self.assertEqual(self.supervisor.ledger.read_settings()['fixed_entry_quantity'],'2')
+        response=self.client.post('/api/live/settings',headers=headers,json={**payload,'sizing_mode':'capital','per_position':'100'})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertIsNone(response.json()['strategy']['fixed_entry_quantity'])
+        self.assertEqual(response.json()['strategy']['sizing_mode'],'capital')
         self.assertEqual(self.broker.order_calls,0)
 
     def test_weekend_signal_is_mapped_without_starting_market_runtime(self):
@@ -669,7 +683,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
         instruments={s:KotakInstrument(s,s+"-EQ",str(i+100)) for i,s in enumerate(symbols)}
         ranges={s:(Decimal("100"),Decimal("95")) for s in symbols}
         custom_policy=LivePolicy(time(10),time(15,15),10,10,20,
-            Decimal("50000"),Decimal("1000000"),"start",entry_quantity_cap=1)
+            Decimal("50000"),Decimal("1000000"),"start",fixed_entry_quantity=2)
         runtime=LiveRuntime(session_date=date(2026,11,4),signals=signals,dhan_ids=ids,
             kotak_instruments=instruments,opening_ranges=ranges,policy=custom_policy,
             ledger=self.ledger,broker=FakeBroker(),enabled=True,clock=lambda:TODAY)
@@ -712,7 +726,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
             self.assertEqual(restarted.exit_due(exit_at),[])
             rows=restarted.ledger.snapshot(TODAY.date())
             self.assertEqual(sum(x["phase"]=="EXIT" for x in rows),20)
-            self.assertTrue(all(x["state"]=="FILLED" and x["quantity"]==1 for x in rows))
+            self.assertTrue(all(x["state"]=="FILLED" and x["quantity"]==2 for x in rows))
 
     def test_thirty_simultaneous_breakouts_with_duplicates_reserve_at_most_ten_entries(self):
         """Sixty simultaneous ticks across 30 stocks cannot exceed the 5+5 cap."""
@@ -725,7 +739,7 @@ class KotakOrderSafetyTests(unittest.TestCase):
         instruments={s:KotakInstrument(s,s+"-EQ",str(i+100)) for i,s in enumerate(symbols)}
         ranges={s:(Decimal("100"),Decimal("95")) for s in symbols}
         runtime=LiveRuntime(session_date=TODAY.date(),signals=signals,dhan_ids=ids,
-            kotak_instruments=instruments,opening_ranges=ranges,policy=replace(self.policy, entry_quantity_cap=1),
+            kotak_instruments=instruments,opening_ranges=ranges,policy=replace(self.policy, fixed_entry_quantity=2),
             ledger=self.ledger,broker=FakeBroker(),enabled=True,clock=lambda:TODAY)
         self.addCleanup(runtime.close)
         submit_tags=[]
@@ -760,8 +774,8 @@ class KotakOrderSafetyTests(unittest.TestCase):
         self.assertEqual(sum(row["side"]=="BUY" for row in rows),5)
         self.assertEqual(sum(row["side"]=="SELL" for row in rows),5)
         self.assertEqual(len(submit_tags),10)
-        self.assertTrue(all(row["quantity"] == 1 for row in rows))
-        self.assertEqual(set(submit_tags), {(row["symbol"], row["tag"], 1) for row in rows})
+        self.assertTrue(all(row["quantity"] == 2 for row in rows))
+        self.assertEqual(set(submit_tags), {(row["symbol"], row["tag"], 2) for row in rows})
         self.assertTrue(all(row["state"]=="FILLED" for row in rows))
 
     def test_independent_ledger_workers_serialize_position_caps_without_deadlock(self):

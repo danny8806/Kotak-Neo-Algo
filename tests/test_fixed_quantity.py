@@ -24,7 +24,7 @@ class FixedQuantityTests(unittest.TestCase):
                     orb_high=Decimal('124000'), orb_low=Decimal('123000'), tick_at=NOW)
         self.assertEqual(candidate_entry(**args, policy=self.policy), 1)
         self.assertIsNone(candidate_entry(**args, policy=replace(self.policy, fixed_entry_quantity=None)))
-        self.assertIsNone(candidate_entry(**args, policy=self.policy, reserved_gross=Decimal('900000')))
+        self.assertEqual(candidate_entry(**args, policy=self.policy, reserved_gross=Decimal('900000')),1)
         self.assertIsNone(candidate_entry(**args, policy=self.policy, open_positions=10))
         self.assertIsNone(candidate_entry(**args, policy=self.policy, open_long=5))
         args.update(side='SHORT', previous_price=Decimal('123000'), price=Decimal('122999'))
@@ -50,7 +50,7 @@ class FixedQuantityTests(unittest.TestCase):
         desk.policy = self.policy
         self.assertEqual(desk._readiness_blockers_locked(NOW), [])
         desk.policy = replace(self.policy, fixed_entry_quantity=None)
-        self.assertIn('FUNDS', desk._readiness_blockers_locked(NOW))
+        self.assertNotIn('FUNDS', desk._readiness_blockers_locked(NOW))
         desk.policy = self.policy
         desk.allowed = False
         self.assertIn('SERVER_ORDERS_DISABLED', desk._readiness_blockers_locked(NOW))
@@ -62,8 +62,9 @@ class FixedQuantityTests(unittest.TestCase):
 
     def test_fixed_mode_requires_explicit_one_share_setting(self):
         path = Path(__file__).parents[1] / 'live_desk/policy.json'
-        self.assertIsNone(load_policy(path).fixed_entry_quantity)
+        self.assertEqual(load_policy(path).fixed_entry_quantity,2)
         self.assertEqual(load_policy(path, fixed_entry_quantity='1').fixed_entry_quantity, 1)
-        for invalid in ['0', '2', '-1', '1.5', 'YES']:
+        self.assertEqual(load_policy(path,fixed_entry_quantity='2').fixed_entry_quantity,2)
+        for invalid in ['0', '-1', '1.5', 'YES']:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 load_policy(path, fixed_entry_quantity=invalid)

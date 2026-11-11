@@ -85,15 +85,15 @@ if the process is up.
 
 Private environment credentials are required for Kotak Neo and read-only Dhan
 market data. `live_desk/policy.json` sets defaults: the 09:15 opening candle,
-09:30 entry cutoff, 15:00 exit, up to five positions per side, ₹1 lakh per
-position and ₹10 lakh gross cap. The authenticated dashboard lets an operator
-customize per-stock allocation, maximum total/long/short positions (up to 10
-total), gross cap, entry cutoff up to 09:30 IST, and exit time while disarmed.
+09:30 entry cutoff, 15:00 exit, up to five positions per side, and two shares per
+stock by default. The authenticated dashboard selects quantity per stock or
+capital per stock, maximum total/long/short positions (up to 10 total),
+entry cutoff up to 09:30 IST, and exit time while disarmed.
 These settings persist in the PostgreSQL live ledger, survive restarts and are
 locked while armed. PostgreSQL advisory locks serialize daily cap reservations
 across workers. The exit setting may be earlier than 15:00 but cannot be later.
-Legacy settings above 15:00 are capped at startup. Compose defaults to one share
-per entry, subject to the existing capital and position limits.
+Legacy settings above 15:00 are capped at startup. Broker funds are informational;
+no local available-cash/minimum-capital/gross-notional gate blocks either sizing mode.
 
 The policy sets `dhan_candle_timestamp_mode` to `end`, verified against returned
 Dhan 09:15 one-minute candle timestamps on 2026-11-05. Recheck it if Dhan changes
@@ -146,16 +146,15 @@ profitability.
 
 ## Production recovery and live dashboard
 
-`LIVE_FIXED_ENTRY_QUANTITY=1` explicitly selects exactly one share per qualifying
-entry, including stocks whose share price exceeds the allocation field. In this
-mode Kotak determines margin acceptance/rejection; the local cash-versus-gross-cap
-precheck does not block the batch. The gross exposure and position caps, fresh
-broker books/ticks, entry window, server permission and per-session arming still
-apply. An empty value retains allocation sizing and its funds check.
-`LIVE_ENTRY_QUANTITY_CAP=1` alone remains a maximum, not fixed sizing.
+`LIVE_FIXED_ENTRY_QUANTITY=2` sets the initial fixed size; authenticated saved
+settings select a positive integer quantity or capital mode. Capital mode rounds
+down the configured per-stock amount divided by the breakout price. Kotak decides
+margin acceptance/rejection. Position counts, fresh books/ticks, entry windows,
+server permissions and session authorization continue to apply. Legacy gross
+allocation fields remain storage compatibility data; they do not block entries.
 
 With explicit server authorization, `LIVE_AUTO_TRADING=YES` together with
-`LIVE_ORDERS_ALLOWED=YES` and `LIVE_FIXED_ENTRY_QUANTITY=1` automatically enables
+`LIVE_ORDERS_ALLOWED=YES` automatically enables the saved sizing mode for
 entries after broker login, valid session signals, mappings, opening ranges,
 fresh ticks/books and recovery checks pass inside 09:16–09:30 IST. This mode
 requires no separate operator TOTP or dashboard login for daily execution.

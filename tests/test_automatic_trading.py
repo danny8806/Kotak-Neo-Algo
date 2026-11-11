@@ -52,7 +52,7 @@ class AutomaticTradingTests(unittest.TestCase):
         d._maybe_auto_arm(NOW)
         self.assertEqual(d.ledger.snapshot.call_count, 1)
 
-    def test_disabled_or_non_fixed_mode_never_auto_arms(self):
+    def test_disabled_mode_does_not_arm_and_configured_capital_mode_can_arm(self):
         for field, value in [('auto_trading', False), ('allowed', False)]:
             d = self.desk()
             setattr(d, field, value)
@@ -61,7 +61,7 @@ class AutomaticTradingTests(unittest.TestCase):
         d = self.desk()
         d.policy = replace(d.policy, fixed_entry_quantity=None)
         d._maybe_auto_arm(NOW)
-        self.assertFalse(d.armed)
+        self.assertTrue(d.armed)
 
     def test_window_and_weekend_gates_cannot_be_bypassed(self):
         for at in [NOW.replace(hour=9, minute=15), NOW.replace(minute=30),

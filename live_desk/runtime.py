@@ -181,7 +181,8 @@ class LiveRuntime:
             session_date=self.session_date, symbol=symbol, side=direction,
             quantity=quantity, reference_price=price, at=at,
             max_per_side=self.policy.max_long if direction == "BUY" else self.policy.max_short,
-            gross_cap=self.policy.gross_cap, max_total=self.policy.max_positions)
+            gross_cap=self.policy.gross_cap if self.policy.enforce_capital_limits else None,
+            max_total=self.policy.max_positions)
         if intent:
             with self.lock:self.reserved_symbols.add(symbol)
             self._submit_and_reconcile(intent,at,received_ns=received_ns,feed_generation=feed_generation)

@@ -34,8 +34,8 @@ class InternalNewsTests(unittest.TestCase):
             self.assertEqual(c.execute(select(signal_batches.c.pipeline_version)).scalar_one(),
                              PIPELINE_VERSION)
     def test_late_cutoff_is_rejected_before_storage(self):
-        r={**self.report,'news_cutoff_at':'2026-11-11T09:05:00+05:30',
-           'generated_at':'2026-11-11T09:06:00+05:30'}
+        r={**self.report,'news_cutoff_at':'2026-11-11T09:12:00+05:30',
+           'generated_at':'2026-11-11T09:12:00+05:30'}
         self.put(report=r)
         self.assertEqual(self.intake.sync_once()['status'],'FINAL_WINDOW_REJECTED')
         with self.app.state.engine.connect() as c:

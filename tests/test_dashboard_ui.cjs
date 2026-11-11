@@ -17,7 +17,7 @@ const state={mode:'LIVE_KOTAK_NEO_ONLY',server_time:new Date(marketTime).toISOSt
  pnl:{gross_realized:50,gross_unrealized:25,gross_total:75,net_after_fees:null},broker_books_updated_at:new Date(marketTime).toISOString(),
  armed:false,readiness:false,orders_permitted_by_server:false,dhan_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},kotak_authentication:{state:'AUTHENTICATED',next_refresh:'2026-11-06T08:00:00+05:30'},
  supervisor_status:'DISARMED',blocked_stage:'SERVER_ORDERS_DISABLED',readiness_blockers:['SERVER_ORDERS_DISABLED'],market_feed:{state:'CONNECTED'},
- strategy:{allocation_per_position:100000,max_positions:10,gross_cap:1000000,max_long:5,max_short:5,entry_cutoff:'09:30',exit_time:'15:00',entry_quantity_cap:1},
+ strategy:{allocation_per_position:100000,max_positions:10,gross_cap:1000000,max_long:5,max_short:5,entry_cutoff:'09:30',exit_time:'15:00',entry_quantity_cap:null,fixed_entry_quantity:2,sizing_mode:'quantity'},
  instrument_mappings:[{symbol:'TESTA',dhan_security_id:'123',kotak_trading_symbol:'TESTA-EQ',kotak_token:'456',status:'READY'},{symbol:'TESTB',dhan_security_id:'124',kotak_trading_symbol:'TESTB-EQ',kotak_token:'457',status:'READY'}],
  orb_monitor:{state:'MONITORING',order_submission_enabled:false,opening_ranges:[{symbol:'TESTA',high:100,low:95},{symbol:'TESTB',high:101,low:96}],breakouts:[]},intents:[],runtime_errors:[]};
 function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOString();}
@@ -33,7 +33,7 @@ function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOSt
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
  try{
-  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{})});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('requestfailed',r=>console.log('request_failed',r.url(),r.failure()?.errorText));
+  browser=await chromium.launch({headless:true,args:process.platform==='linux'?['--no-sandbox','--disable-dev-shm-usage']:[],...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{})});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('requestfailed',r=>console.log('request_failed',r.url(),r.failure()?.errorText));
   await page.clock.setFixedTime(marketTime);
   await page.addInitScript(()=>{window.WebSocket=class {static OPEN=1;static CONNECTING=0;constructor(){this.readyState=1;window._testSocket=this;}close(){this.readyState=3;}};});
   const origin='http://127.0.0.1:'+server.address().port;const loginPage=await browser.newPage();await loginPage.goto(origin+'/kotak-live/login');await loginPage.locator('#password').fill('Synthetic-test-password');await loginPage.locator('button.primary').click();await loginPage.waitForURL('**/kotak-live/');await loginPage.close();
@@ -88,24 +88,24 @@ function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOSt
   await page.locator('#orderSearch').fill('');await page.locator('#orderStatus').selectOption('rejected');assert.match(await page.locator('#orderBody').textContent(),/No orders/);await page.locator('#orderStatus').selectOption('complete');assert.equal(await page.locator('#orderBody tr').count(),50);
   await go('fills');assert.equal(await page.locator('#fillBody tr').count(),50);await page.locator('#fillSearch').fill('TEST-FILL-0');assert.equal(await page.locator('#fillBody tr').count(),1);
   await go('journal');await page.waitForFunction(()=>document.getElementById('journalClosed').textContent==='1');assert.equal(await page.locator('#journalTradeBody tr').count(),1);assert.match(await page.locator('#journalTradeBody').textContent(),/TESTA/);assert.equal(await page.locator('#journalGross').textContent(),'₹25.00');assert.equal(await page.locator('#journalLoss').textContent(),'₹0.00');assert.equal(await page.locator('#journalReturn').textContent(),'5.00%');assert.match(await page.locator('#journalEventBody').textContent(),/FILLED/);assert.match(await page.locator('#journalFillBody').textContent(),/F-TEST/);assert.match(await page.locator('#journalFees').textContent(),/NOT AVAILABLE/);
-  await go('settings');assert.equal(await page.locator('#saveSettings').isDisabled(),true);await page.locator('#settingAllocation').fill('125000');await page.locator('#settingGross').focus();await push();assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');
+  await go('settings');assert.equal(await page.locator('#saveSettings').isDisabled(),true);assert.equal(await page.locator('#settingQuantity').inputValue(),'2');await page.locator('#settingSizingMode').selectOption('capital');await page.locator('#settingAllocation').fill('125000');await page.locator('#settingsPrice').focus();await push();assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');
   await go('overview');await go('settings');assert.equal(await page.locator('#settingAllocation').inputValue(),'125000');await page.locator('#resetSettings').click();assert.equal(await page.locator('#settingAllocation').inputValue(),'100000');
   await page.locator('#settingsPrice').fill('320.50');
-  assert.match(await page.locator('#settingsShares').textContent(),/^1 share /);
+  assert.match(await page.locator('#settingsShares').textContent(),/^2 shares /);
   assert.equal(await page.locator('#saveSettings').isDisabled(),true,'Calculator does not edit settings');
-  const edits={settingAllocation:'125500.25',settingGross:'300000.25',settingMaxPositions:'3',
+  await page.locator('#settingSizingMode').selectOption('capital');
+  const edits={settingAllocation:'125500.25',settingMaxPositions:'3',
     settingMaxLong:'2',settingMaxShort:'1',settingCutoff:'09:27',settingExit:'14:55'};
   for(const [id,value] of Object.entries(edits))await page.locator('#'+id).fill(value);
-  assert.equal(await page.locator('#settingsPlanned').textContent(),'₹3,00,000.25');
-  assert.equal(await page.locator('#settingsSlots').textContent(),'2');
-  assert.equal(await page.locator('#settingsShares').textContent(),'1 share · ₹320.50 reference notional');
+  assert.equal(await page.locator('#settingsPlanned').textContent(),'₹3,76,500.75');
+  assert.equal(await page.locator('#settingsSlots').textContent(),'3');
+  assert.equal(await page.locator('#settingsShares').textContent(),'391 shares · ₹1,25,315.50 reference notional');
   await page.locator('#settingsPrice').fill('125500.26');
   assert.match(await page.locator('#settingsShares').textContent(),/^0 shares/);
-  state.strategy.fixed_entry_quantity=1;await push();
-  assert.match(await page.locator('#settingsShares').textContent(),/^1 share/);
-  assert.match(await page.locator('#settingsFundingNote').textContent(),/Kotak determines margin acceptance or rejection/);
-  assert.match(await page.locator('#policy').textContent(),/Exactly one share per stock/);
-  delete state.strategy.fixed_entry_quantity;await push();
+  await page.locator('#settingSizingMode').selectOption('quantity');await push();
+  assert.match(await page.locator('#settingsShares').textContent(),/^2 shares/);
+  assert.match(await page.locator('#settingsFundingNote').textContent(),/balance is informational/);
+  assert.match(await page.locator('#policy').textContent(),/2 shares per stock/);
   state.automatic_trading={enabled:true,paused_today:false,error:null};state.orders_permitted_by_server=true;
   await push();
   assert.equal(await page.locator('#arm').isVisible(),false);
@@ -116,10 +116,10 @@ function bump(){state.server_time=new Date(marketTime+(++revision)*1000).toISOSt
   assert.equal(await page.locator('#disarm').isDisabled(),true);
   assert.match(await page.locator('#armNotice').textContent(),/stop survives restarts/);
   delete state.automatic_trading;state.orders_permitted_by_server=false;await push();
-  await page.locator('#settingGross').fill('125500.24');
-  assert.match(await page.locator('#settingsValidation').textContent(),/Gross cap must cover/);
+  await page.locator('#settingQuantity').fill('0');
+  assert.match(await page.locator('#settingsValidation').textContent(),/positive whole number/);
   assert.equal(await page.locator('#saveSettings').isDisabled(),true);
-  await page.locator('#settingGross').fill(edits.settingGross);
+  await page.locator('#settingQuantity').fill('2');
   await page.locator('#settingMaxPositions').fill('4');
   assert.match(await page.locator('#settingsValidation').textContent(),/combined LONG and SHORT/);
   assert.equal(await page.locator('#saveSettings').isDisabled(),true);

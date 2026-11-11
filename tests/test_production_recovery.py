@@ -664,7 +664,7 @@ class ProductionReplayTests(unittest.TestCase):
                 long = sides[symbol] == "LONG"
                 self.assertEqual((call["trading_symbol"], call["transaction_type"], call["quantity"],
                                   call["exchange_segment"], call["product"], call["order_type"]),
-                                 (symbol + "-EQ", "B" if long else "S", "1",
+                                 (symbol + "-EQ", "B" if long else "S", "2",
                                   "nse_cm", "MIS", "MKT"))
             now[0]=NOW.replace(hour=14,minute=59,second=59);desk.cycle()
             self.assertEqual(len(broker.calls),10)
@@ -673,7 +673,7 @@ class ProductionReplayTests(unittest.TestCase):
             self.assertEqual(len(rows), 20)
             self.assertTrue(all(row["state"] == "FILLED" for row in rows))
             self.assertEqual(len(broker.calls), 20)
-            self.assertTrue(all(call["quantity"] == "1" for call in broker.calls))
+            self.assertTrue(all(call["quantity"] == "2" for call in broker.calls))
             now[0] += timedelta(seconds=5)
             desk.cycle()
             self.assertEqual(len(broker.calls), 20)
@@ -684,7 +684,7 @@ class ProductionReplayTests(unittest.TestCase):
             self.assertEqual({row["symbol"]:row for row in dashboard["closed_trades"]},
                              {row["symbol"]:row for row in journal["trades"]})
             self.assertEqual(journal["summary"]["open_trade_count"], 0)
-            self.assertEqual(journal["summary"]["gross_realized_from_exits"], 20)
+            self.assertEqual(journal["summary"]["gross_realized_from_exits"], 40)
             self.assertEqual(journal["summary"]["closed_trade_return_pct"], 2.05)
             self.assertEqual(journal["summary"]["win_rate_pct"], 100)
             self.assertIsNone(journal["summary"]["net_after_fees"])

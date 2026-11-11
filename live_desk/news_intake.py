@@ -52,11 +52,11 @@ class InternalNewsIntake:
             return self._record(status='FINAL_WINDOW_REJECTED', session_date=day,
                                 reason='missing or invalid final timestamps')
         if (cutoff.date().isoformat() != day or generated.date().isoformat() != day
-                or cutoff.timetz().replace(tzinfo=None) > FINAL_CUTOFF
-                or generated.timetz().replace(tzinfo=None) > FINAL_DEADLINE
+                or cutoff.timetz().replace(tzinfo=None) >= FINAL_CUTOFF
+                or generated.timetz().replace(tzinfo=None) >= FINAL_DEADLINE
                 or generated < cutoff):
             return self._record(status='FINAL_WINDOW_REJECTED', session_date=day,
-                                reason='final report is outside the 09:00 cutoff / 09:12 deadline')
+                reason='final report is outside the decision cutoff / 09:12 deadline')
         raw = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         digest = hashlib.sha256(raw.encode()).hexdigest()
         ack = ingest_report(self.signal_engine, payload, f'vps-final-{day}-{digest[:24]}',

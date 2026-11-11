@@ -117,10 +117,12 @@
   <article class="panel">
     <div class="panel-heading"><div><h2>Trading limits</h2><p>Saved to the live ledger. Editable while disarmed.</p></div><span class="pill" id="settingsState">WAITING</span></div>
     <form id="settingsForm" class="settings-form">
-      <div class="form-section-title">CAPITAL</div>
+      <div class="form-section-title">ORDER SIZE</div>
       <div class="form-grid">
-        <label>Allocation per stock <span>₹</span><input id="settingAllocation" type="number" inputmode="decimal" min="1000" max="20000000" step="0.01" required/><small>Same reference budget for every eligible stock. Quantity rounds down at the breakout price.</small></label>
-        <label>Total gross cap <span>₹</span><input id="settingGross" type="number" inputmode="decimal" min="1000" max="100000000" step="0.01" required/><small>Combined entry notional limit across LONG and SHORT positions.</small></label>
+        <label>Size orders by<select id="settingSizingMode"><option value="quantity">Quantity per stock</option><option value="capital">Capital per stock</option></select><small>Choose a share quantity or a rupee allocation.</small></label>
+        <label id="quantitySetting">Quantity per stock<input id="settingQuantity" type="number" inputmode="numeric" min="1" step="1" value="2" required/><small>Default: 2 shares for each entry.</small></label>
+        <label id="capitalSetting">Capital per stock <span>₹</span><input id="settingAllocation" type="number" inputmode="decimal" min="0.01" max="20000000" step="0.01" required/><small>Whole shares = capital divided by breakout price, rounded down.</small></label>
+        <input id="settingGross" type="hidden" value="1000000"/>
       </div>
       <div class="form-section-title">POSITION LIMITS</div>
       <div class="form-grid three">
@@ -138,9 +140,9 @@
     </form>
   </article>
   <div class="settings-side">
-    <article class="panel"><div class="panel-heading"><div><h2>Capital preview</h2><p>Based on the values in this form</p></div></div>
+    <article class="panel"><div class="panel-heading"><div><h2>Order size preview</h2><p>Based on the values in this form</p></div></div>
       <dl class="settings-summary"><div><dt>Maximum planned allocation</dt><dd id="settingsPlanned">—</dd></div><div><dt>Full-size allocations</dt><dd id="settingsSlots">—</dd></div><div><dt>Available Kotak funds</dt><dd id="settingsFunds">—</dd></div></dl>
-      <p class="settings-preview-note" id="settingsFundingNote">Waiting for live account data.</p>
+      <p class="settings-preview-note" id="settingsFundingNote">Configured order size is sent directly. Broker funds are informational.</p>
       <div class="settings-calculator">
         <label for="settingsPrice">Example breakout price (₹)</label>
         <input id="settingsPrice" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="Enter a price"/>

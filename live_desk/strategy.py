@@ -27,10 +27,11 @@ class LivePolicy:
     timestamp_mode: str | None
     entry_quantity_cap: int | None = None
     fixed_entry_quantity: int | None = None
+    enforce_capital_limits: bool = False
 
     def __post_init__(self):
-        if self.fixed_entry_quantity not in (None, 1):
-            raise ValueError("Fixed entry quantity must be exactly one share")
+        if self.fixed_entry_quantity is not None and (type(self.fixed_entry_quantity) is not int or self.fixed_entry_quantity < 1):
+            raise ValueError("Fixed entry quantity must be a positive whole number")
         # Apply current deadlines to settings persisted by older releases.
         if self.entry_cutoff > LATEST_ENTRY_CUTOFF:
             object.__setattr__(self, "entry_cutoff", LATEST_ENTRY_CUTOFF)
@@ -38,7 +39,7 @@ class LivePolicy:
             object.__setattr__(self, "exit_time", LATEST_EXIT_TIME)
 
 
-def load_policy(path: Path, *, entry_quantity_cap: str = "", fixed_entry_quantity: str = "") -> LivePolicy:
+def load_policy(path: Path, *, entry_quantity_cap: str = "", fixed_entry_quantity: str = "2") -> LivePolicy:
     data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("version") != 1 or data.get("exchange_timezone") != "Asia/Kolkata":
         raise ValueError("Unsupported live strategy config")
@@ -59,8 +60,8 @@ def load_policy(path: Path, *, entry_quantity_cap: str = "", fixed_entry_quantit
                                or not entry_quantity_cap.isdecimal()
                                or int(entry_quantity_cap) < 1):
         raise ValueError("LIVE_ENTRY_QUANTITY_CAP must be a positive whole number")
-    if fixed_entry_quantity not in ("", "1"):
-        raise ValueError("LIVE_FIXED_ENTRY_QUANTITY must be empty or 1")
+    if fixed_entry_quantity and (not fixed_entry_quantity.isascii() or not fixed_entry_quantity.isdecimal() or int(fixed_entry_quantity)<1):
+        raise ValueError("LIVE_FIXED_ENTRY_QUANTITY must be a positive whole number")
     return LivePolicy(cutoff, exit_at, max_long, max_short, max_positions, per_position, gross,
                       data.get("dhan_candle_timestamp_mode"), int(entry_quantity_cap) if entry_quantity_cap else None,
                       int(fixed_entry_quantity) if fixed_entry_quantity else None)
@@ -89,8 +90,8 @@ def candidate_entry(*, side: str, previous_price: Decimal, price: Decimal,
         return None
     quantity = (policy.fixed_entry_quantity if policy.fixed_entry_quantity is not None else
                 int((policy.per_position / price).to_integral_value(rounding=ROUND_DOWN)))
-    if policy.entry_quantity_cap is not None:
+    if policy.enforce_capital_limits and policy.entry_quantity_cap is not None:
         quantity = min(quantity, policy.entry_quantity_cap)
-    if quantity < 1 or reserved_gross + quantity * price > policy.gross_cap:
+    if quantity < 1 or (policy.enforce_capital_limits and reserved_gross + quantity * price > policy.gross_cap):
         return None
     return quantity

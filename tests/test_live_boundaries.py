@@ -62,22 +62,22 @@ class LiveBoundaryTests(unittest.TestCase):
                 decision = dict(side=side, previous_price=Decimal(previous), price=Decimal(price),
                                 orb_high=Decimal(high), orb_low=Decimal(low), tick_at=tick_at, policy=policy)
                 self.assertEqual(candidate_entry(**decision), expected)
-                self.assertIsNone(candidate_entry(**decision, reserved_gross=Decimal("250000.00")))
+                self.assertEqual(candidate_entry(**decision, reserved_gross=Decimal("250000.00")),expected)
                 self.assertIsNone(candidate_entry(**decision, open_positions=3))
 
     def test_one_share_cap_respects_capital_and_both_directions(self):
         policy = LivePolicy(time(9, 30), time(15, 15), 5, 5, 10,
-                            Decimal("1000"), Decimal("1000"), "end", entry_quantity_cap=1)
+                            Decimal("1000"), Decimal("1000"), "end", fixed_entry_quantity=1)
         tick_at = datetime(2026, 11, 5, 9, 17, tzinfo=IST)
         for side, previous, price in (("LONG", "100", "101"), ("SHORT", "95", "94")):
             with self.subTest(side=side):
                 decision = dict(side=side, previous_price=Decimal(previous), price=Decimal(price),
                                 orb_high=Decimal("100"), orb_low=Decimal("95"), tick_at=tick_at)
                 self.assertEqual(candidate_entry(**decision, policy=policy), 1)
-                self.assertIsNone(candidate_entry(
-                    **decision, policy=replace(policy, per_position=Decimal("90"))))
-                self.assertIsNone(candidate_entry(
-                    **decision, policy=policy, reserved_gross=Decimal("950")))
+                self.assertEqual(candidate_entry(
+                    **decision, policy=replace(policy, per_position=Decimal("90"))),1)
+                self.assertEqual(candidate_entry(
+                    **decision, policy=policy, reserved_gross=Decimal("950")),1)
 
     def test_sizing_matches_integer_paise_model_across_20000_cases(self):
         rng = Random(9301515)
@@ -109,7 +109,7 @@ class LiveBoundaryTests(unittest.TestCase):
             crosses = (previous <= edge < price and longs < max_long if side == "LONG"
                        else previous >= edge > price and shorts < max_short)
             expected = shares if (0 <= offset < 840_000_000 and crosses and total < max_total
-                                  and shares and reserved + price * shares <= cap) else None
+                                  and shares) else None
             self.assertEqual(result, expected, f"seed=9301515 case={i}")
 
     def test_kotak_order_boundary_requires_exact_mapped_instrument(self):

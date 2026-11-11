@@ -102,7 +102,7 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
     @app.get("/ready")
     def ready():
         if not desk.ready():
-            raise HTTPException(status_code=503,detail="Live feeds, funds, instruments or session not ready")
+            raise HTTPException(status_code=503,detail="Live feeds, instruments or session not ready")
         return {"status":"monitoring_live","armed":desk.armed}
 
     @app.get("/login")
@@ -156,7 +156,9 @@ def create_live_app(*,database_url=None,bearer_token=None,dashboard_password=Non
         return {"saved":True,"strategy":{"entry_cutoff":policy.entry_cutoff.isoformat(),
             "exit_time":policy.exit_time.isoformat(),"max_long":policy.max_long,
             "max_short":policy.max_short,"max_positions":policy.max_positions,
-            "allocation_per_position":str(policy.per_position),"gross_cap":str(policy.gross_cap)}}
+            "allocation_per_position":str(policy.per_position),"gross_cap":str(policy.gross_cap),
+            "fixed_entry_quantity":policy.fixed_entry_quantity,
+            "sizing_mode":"capital" if policy.fixed_entry_quantity is None else "quantity"}}
 
     @app.get("/api/live/orders")
     def order_book(request:Request):

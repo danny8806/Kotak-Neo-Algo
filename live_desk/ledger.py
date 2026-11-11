@@ -99,7 +99,7 @@ class LiveLedger:
 
     def reserve_entry(self, *, session_date: date, symbol: str, side: str,
                       quantity: int, reference_price: Decimal, at: datetime,
-                      max_per_side: int, gross_cap: Decimal, max_total: int = 20) -> dict | None:
+                      max_per_side: int, gross_cap: Decimal | None, max_total: int = 20) -> dict | None:
         if side not in {"BUY", "SELL"} or type(quantity) is not int or quantity <= 0:
             raise ValueError("Invalid entry side or quantity")
         if not symbol or not reference_price.is_finite() or reference_price <= 0:
@@ -108,7 +108,7 @@ class LiveLedger:
             raise ValueError("Entry time must include timezone")
         day = session_date
         notional = reference_price * quantity
-        if notional > gross_cap:
+        if gross_cap is not None and notional > gross_cap:
             return None
         with self.engine.begin() as db:
             self._lock_session(db, day)
@@ -116,7 +116,7 @@ class LiveLedger:
                 intents.c.session_date == day, intents.c.phase == "ENTRY")).mappings().all()
             if (any(row["symbol"] == symbol for row in rows) or
                     len(rows) >= max_total or sum(row["side"] == side for row in rows) >= max_per_side or
-                    sum(Decimal(row["reserved_notional"]) for row in rows) + notional > gross_cap):
+                    (gross_cap is not None and sum(Decimal(row["reserved_notional"]) for row in rows) + notional > gross_cap)):
                 return None
             tag, stamp = uuid.uuid4().hex, at
             db.execute(intents.insert().values(tag=tag, session_date=day, symbol=symbol,

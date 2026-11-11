@@ -100,7 +100,7 @@ def replay(audit_path: Path, ready_at: datetime) -> dict:
             gross = sum(row["quantity"] * row["reference_price"] for row in reserved.values())
             if (symbol in reserved or len(reserved) >= entry["max_total"]
                     or side_count >= entry["max_per_side"]
-                    or gross + entry["quantity"] * entry["reference_price"] > entry["gross_cap"]):
+                    or (entry["gross_cap"] is not None and gross + entry["quantity"] * entry["reference_price"] > entry["gross_cap"])):
                 return None
             reserved[symbol] = {**entry, "tag": "next-minute-" + symbol, "phase": "ENTRY"}
             return reserved[symbol]

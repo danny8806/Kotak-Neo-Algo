@@ -147,3 +147,6 @@ table{font-size:11px}th{font-size:9px;color:#6b8293}.code,td.code{font-size:11px
   .session-status { flex-wrap: wrap; }
   .session-status-copy p { font-size: 11px; }
 }
+
+.form-grid select{font:inherit;color:inherit;background:var(--surface,#fff);border:1px solid #d7dfeb;border-radius:8px;padding:12px;width:100%} [hidden]{display:none!important}
+

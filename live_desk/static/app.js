@@ -118,7 +118,7 @@ function renderSessionStatus(s){
    (notes[primary]||reason+".")+count,"blocked",view,links[view]||"View checks");
  }
 }
-function valuesForSettings(){const s=current?.strategy||{};return {settingAllocation:s.allocation_per_position,settingMaxPositions:s.max_positions,settingGross:s.gross_cap,settingMaxLong:s.max_long,settingMaxShort:s.max_short,settingCutoff:s.entry_cutoff,settingExit:s.exit_time};}
+function valuesForSettings(){const s=current?.strategy||{};return {settingSizingMode:s.sizing_mode||(s.fixed_entry_quantity==null?'capital':'quantity'),settingQuantity:s.fixed_entry_quantity??2,settingAllocation:s.allocation_per_position,settingMaxPositions:s.max_positions,settingGross:s.gross_cap,settingMaxLong:s.max_long,settingMaxShort:s.max_short,settingCutoff:s.entry_cutoff,settingExit:s.exit_time};}
 function canEditSettings(){
  return Boolean(current?.strategy&&!stateStale&&!current.armed&&!settingsSaving);
 }
@@ -126,20 +126,19 @@ function settingsPreview(){
  const number=id=>Number($(id).value);
  const paise=id=>Math.round(number(id)*100);
  const perStock=paise("settingAllocation"), gross=paise("settingGross"), slots=number("settingMaxPositions");
- const validCapital=perStock>0&&gross>=perStock&&slots>0;
+ const mode=$("settingSizingMode").value, fixedQuantity=mode==='quantity'?number('settingQuantity'):null;
+ const validCapital=perStock>0&&slots>0;
  const cash=stateStale?null:current?.available_cash;
  const quantityCap=current?.strategy?.entry_quantity_cap;
- const fixedQuantity=current?.strategy?.fixed_entry_quantity;
- text("settingsPlanned",money(validCapital?Math.min(gross,slots*perStock)/100:null));
- text("settingsSlots",validCapital?Math.min(slots,Math.floor(gross/perStock)):null);
+ $('quantitySetting').hidden=mode!=='quantity';$('capitalSetting').hidden=mode!=='capital';
+ $('settingQuantity').disabled=!canEditSettings()||mode!=='quantity';
+ $('settingAllocation').disabled=!canEditSettings()||mode!=='capital';
+ text("settingsPlanned",mode==='capital'&&validCapital?money(slots*perStock/100):'Price dependent');
+ text("settingsSlots",slots);
  text("settingsFunds",money(cash));
- text("settingsFundingNote",fixedQuantity===1?"Exactly one share per stock. Kotak determines margin acceptance or rejection.":
-  cash===null||cash===undefined?"Waiting for fresh Kotak funds.":
-  gross>0&&gross>Math.round(Number(cash)*100)?"Available funds are below the gross cap. Entries stay blocked by the funds check.":
-  quantityCap?"Entry quantity is capped at "+quantityCap+" per stock.":
-  "Full-size allocations use the entire per-stock budget. Actual quantities round down.");
+ text("settingsFundingNote","Configured order size is sent directly. Kotak determines acceptance or rejection; balance is informational.");
  const price=paise("settingsPrice"),shares=price>0&&perStock>0&&$("settingsPrice").validity.valid?
-  (fixedQuantity===1?1:Math.min(Math.floor(perStock/price),quantityCap??Infinity)):null;
+  (fixedQuantity??Math.floor(perStock/price)):null;
  text("settingsShares",shares===null?"Enter a price to estimate whole shares per stock.":
   fmt(shares,0)+(shares===1?" share":" shares")+" · "+money(shares*price/100)+" reference notional");
  const seconds=id=>{
@@ -147,7 +146,7 @@ function settingsPreview(){
   return hour*3600+minute*60+second;
  };
  let issue="";
- if(gross>0&&gross<perStock)issue="Gross cap must cover at least one stock allocation.";
+ if(mode==='quantity'&&(!Number.isInteger(fixedQuantity)||fixedQuantity<1))issue="Quantity must be a positive whole number.";
  else if(slots>number("settingMaxLong")+number("settingMaxShort"))issue="Maximum stocks cannot exceed the combined LONG and SHORT limits.";
  else if(seconds("settingExit")<=seconds("settingCutoff"))issue="Square-off must follow the entry cutoff.";
  else if($("settingExit").validity.rangeOverflow)issue="Square-off must be no later than 15:00 IST.";
@@ -184,11 +183,11 @@ function render(s){
  const blockers=s.readiness_blockers||[],total=Object.keys(GATES).length,passed=total-new Set(blockers.filter(k=>GATES[k])).size;
  $("gateProgress").max=total;$("gateProgress").value=passed;
  text("gateSummary",passed+" of "+total+" prerequisites verified");text("allGateSummary",s.readiness?"All entry checks passed":blockers.length+" checks need attention before new entries");gates(s);renderSessionStatus(s);renderOpeningWorkflow(s);
- text("policy","09:15 one-minute opening range. New-entry cutoff "+safeText(s.strategy?.entry_cutoff)+"; square-off "+safeText(s.strategy?.exit_time)+" IST. Up to "+safeText(s.strategy?.max_long)+" LONG / "+safeText(s.strategy?.max_short)+" SHORT, "+safeText(s.strategy?.max_positions)+" total positions. "+(s.strategy?.fixed_entry_quantity===1?"Exactly one share per stock; Kotak checks margin. ":"Allocation "+money(s.strategy?.allocation_per_position)+" per stock; ")+"gross cap "+money(s.strategy?.gross_cap)+".");
+ text("policy","09:15 one-minute opening range. New-entry cutoff "+safeText(s.strategy?.entry_cutoff)+"; square-off "+safeText(s.strategy?.exit_time)+" IST. Up to "+safeText(s.strategy?.max_long)+" LONG / "+safeText(s.strategy?.max_short)+" SHORT, "+safeText(s.strategy?.max_positions)+" total positions. "+(s.strategy?.fixed_entry_quantity!=null?s.strategy.fixed_entry_quantity+" shares per stock. ":"Capital "+money(s.strategy?.allocation_per_position)+" per stock. ")+"Configured size is submitted directly; broker funds are informational.");
  const automatic=s.automatic_trading?.enabled===true,paused=s.automatic_trading?.paused_today===true;
  text("authorizationMode",automatic?"AUTOMATIC · ONE SHARE":"MANUAL CONTROL");
- text("authorizationHelp",automatic?"Broker login and live readiness checks authorize one-share entries automatically. Closing or signing out of this dashboard does not stop automatic trading.":"Arming permits actual Kotak orders after all session prerequisites pass.");
- text("armNotice",!s.orders_permitted_by_server?"Server order permission is off. Account monitoring remains read-only.":automatic?paused?"Automatic entries are stopped for today. The stop survives restarts; the next session checks readiness again.":s.armed?"Automatic one-share trading is active. Kotak determines order acceptance.":s.automatic_trading?.error||"Automatic mode is waiting for the entry window and live readiness checks. No separate operator OTP is required.":s.armed?"This session is armed for actual Kotak orders.":s.readiness?"Prerequisites passed. Operator authorization and TOTP are required.":"Order authorization is locked until all prerequisites pass.");
+ text("authorizationHelp",automatic?"Broker login and live readiness checks authorize configured-size entries automatically. Closing or signing out of this dashboard does not stop automatic trading.":"Arming permits actual Kotak orders after all session prerequisites pass.");
+ text("armNotice",!s.orders_permitted_by_server?"Server order permission is off. Account monitoring remains read-only.":automatic?paused?"Automatic entries are stopped for today. The stop survives restarts; the next session checks readiness again.":s.armed?"Automatic trading uses the saved quantity or capital setting. Kotak determines order acceptance.":s.automatic_trading?.error||"Automatic mode is waiting for the entry window and live readiness checks. No separate operator OTP is required.":s.armed?"This session is armed for actual Kotak orders.":s.readiness?"Prerequisites passed. Operator authorization and TOTP are required.":"Order authorization is locked until all prerequisites pass.");
  $("arm").hidden=automatic;$("arm").disabled=automatic||!(s.orders_permitted_by_server===true&&s.readiness===true&&!s.armed);
  text("disarm",automatic?"Stop new orders today":"Disarm new entries");
  $("disarm").disabled=automatic?paused:!s.armed;syncSettings();
@@ -362,7 +361,8 @@ $("settingsForm").addEventListener("submit",async event=>{
  if(!canEditSettings()||!settingsDirty||$("saveSettings").disabled)return;
  const payload={per_position:$("settingAllocation").value,max_positions:$("settingMaxPositions").value,
   gross_cap:$("settingGross").value,max_long:$("settingMaxLong").value,max_short:$("settingMaxShort").value,
-  entry_cutoff:$("settingCutoff").value,exit_time:$("settingExit").value};
+  entry_cutoff:$("settingCutoff").value,exit_time:$("settingExit").value,
+  sizing_mode:$("settingSizingMode").value,fixed_entry_quantity:$("settingQuantity").value};
  settingsSaving=true;syncSettings();
  try{
   const r=await fetch(route("/api/live/settings"),{method:"POST",credentials:"same-origin",
@@ -382,3 +382,5 @@ showView();clock();setInterval(clock,1000);getState();connect();
 setInterval(()=>{if(!streamConnected||Date.now()-lastStateReceipt>8000)getState();},10000);
 setInterval(()=>{if(lastStateReceipt&&Date.now()-lastStateReceipt>15000)disconnected("Dashboard state is stale. Reconnecting; verify directly with Kotak.");},3000);
 setInterval(()=>{if(activeView==="journal")loadJournal();},15000);
+
+
