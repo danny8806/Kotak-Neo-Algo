@@ -59,6 +59,8 @@ Production source URLs and enabled states are in the deployed news service's `ne
 
 Additional CLI names/assignment templates may remain as inactive adapters; they are not production workers until an authenticated live-retrieval runner is configured, tested and explicitly included. Do not claim they are running, automatically install them, or introduce a second final selector. Exact actual model IDs and quota states must be reported from runtime evidence, not inferred from a CLI name. Codex's model was not pinned/evidenced in the audited VPS invocation; the old desktop Sol configuration does not establish it.
 
+OpenCode free hosted models must be checked through the actual supported CLI, not a generic raw-inference API preflight. Open-source client software and zero-price hosted inference do not establish unlimited provider allowance. A provider quota error remains unavailable; do not reset identities or invent a quota-reset time. Reuse each tool's own authorized login through its supported credential store. A first-time provider login or missing API key requires private account setup; do not copy Codex/broker credentials into other products. This changes neither the scheduled OpenCode model nor Codex FINAL's sole selection role.
+
 ## Acceptance and maintenance
 
 Validate the two stages in isolated tests before activation: immutable cutoffs, source-to-symbol consistency, no invented fallback, quota failure, strict final deadline, same-day internal intake, repeated/restarted handoff, daily caps and disabled external publishing. Keep test data out of production reports and broker endpoints.
