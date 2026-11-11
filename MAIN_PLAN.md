@@ -49,7 +49,7 @@ This plan connects research to the current dashboard; it does not alter the auth
 
 ## Source registry and agents
 
-Production source URLs and enabled states are in the deployed news service's `news_collector/sources.json` and `source_registry.json`. At the 11 November audit there were 98 registered routes, 86 enabled flags, 12 disabled broker routes and seven provider APIs requiring private keys/opt-in. A registered or enabled route is not a successful-fetch guarantee. Do not invent source coverage or enable paid providers implicitly.
+Production source URLs and enabled states are in the deployed news service's `news_collector/sources.json` and `source_registry.json`. At the 11 November audit the source file contained 98 registered routes and 86 enabled flags, including seven provider APIs requiring private keys/opt-in. Effective polling still obeys access restrictions, keys and cost guards; use the completed run's source-health records to establish actual coverage. A registered or enabled route is not a successful-fetch guarantee. Do not invent source coverage or enable paid providers implicitly.
 
 Additional CLI names/assignment templates may remain as inactive adapters; they are not production workers until an authenticated live-retrieval runner is configured, tested and explicitly included. Do not claim they are running, automatically install them, or introduce a second final selector. Exact actual model IDs and quota states must be reported from runtime evidence, not inferred from a CLI name. Codex's model was not pinned/evidenced in the audited VPS invocation; the old desktop Sol configuration does not establish it.
 
