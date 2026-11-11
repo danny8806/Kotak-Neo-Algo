@@ -63,7 +63,8 @@ JSON serializable`.
 
 ### 13:55 IST — redeploy from the committed SHA
 
-- SHA: `3d7cafd6904e566313a4c36cf6d97de4ec6850ce` (branch merged to `main`)
+- SHA: `3d7cafd6904e566313a4c36cf6d97de4ec6850ce` (deployed code; later `main`
+  commits `a74ab8f` and `9563268` change only this report)
 - Release: `/home/jadhavdnyaneshwar701/kotak-news-live/releases/3d7cafd6904e566313a4c36cf6d97de4ec6850ce`
 - `last_verified_live_commit` now records the same SHA
 - `current` symlink and container point at the new release
