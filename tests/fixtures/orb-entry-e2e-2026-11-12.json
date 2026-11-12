@@ -1,0 +1,938 @@
+{
+  "note": "Recorded public opening OHLC, accepted news signals and public instrument mappings. Partial 09:16 H/L are from the captured live supervisor; the reconstructed test close uses the second-bar open, not a claimed recorded HTTP close. Valid/adversarial tick sequences are constructed only for isolated tests.",
+  "report": {
+    "schema_version": "1.0",
+    "status": "READY",
+    "market": "NSE",
+    "timezone": "Asia/Kolkata",
+    "session_date": "2026-11-12",
+    "news_cutoff_at": "2026-11-12T09:00:04.719478+05:30",
+    "generated_at": "2026-11-12T09:11:48.306295+05:30",
+    "execution_enabled": false,
+    "signals": [
+      {
+        "symbol": "CUPID",
+        "side": "LONG",
+        "rank": 1,
+        "reason": "Reported profit growth and increased FY27 guidance support a stronger earnings outlook.",
+        "news_summary": "CNBC-TV18, published November 11, 2026 at 23:03 IST, reported Q2 profit growth of 133% and raised FY27 guidance of at least â‚¹880 crore revenue and â‚¹275 crore net profit.",
+        "first_available_at": "2026-11-11T23:03:09+05:30",
+        "sources": [
+          {
+            "url": "https://www.cnbctv18.com/market/earnings/cupid-q2-profit-jumps-133pc-raises-fy27-revenue-guidance-to-rs880-crore-20031942.htm",
+            "title": "Cupid Q2 profit jumps 133%, raises FY27 revenue guidance to â‚¹880 crore - CNBC TV18",
+            "published_at": "2026-11-11T23:03:09+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "COFORGE",
+        "side": "LONG",
+        "rank": 2,
+        "reason": "The reported MSCI inclusion creates potential passive buying demand.",
+        "news_summary": "Business Standard, published November 12, 2026 at 08:11 IST, reported the MSCI November reshuffle and attributed estimated Coforge inflows of $630 million to Nuvama Alternative & Quantitative Research.",
+        "first_available_at": "2026-11-12T08:11:35+05:30",
+        "sources": [
+          {
+            "url": "https://www.business-standard.com/markets/news/msci-november-2026-rejig-lic-adani-green-meesho-among-4-additions-pi-inds-exits-126111200074_1.html",
+            "title": "MSCI Nov rejig: LIC, Adani Green, Meesho among 4 additions; PI Inds exits",
+            "published_at": "2026-11-12T08:11:35+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "POWERGRID",
+        "side": "LONG",
+        "rank": 3,
+        "reason": "Successful bidding for the transmission project supports future recurring revenue.",
+        "news_summary": "POWERGRID's NSE disclosure, published November 11, 2026 at 22:11 IST, identified it as successful bidder for the Humnabad transmission project at quoted annual transmission charges of â‚¹243.34 crore.",
+        "first_available_at": "2026-11-11T22:11:00+05:30",
+        "sources": [
+          {
+            "url": "https://nsearchives.nseindia.com/corporate/POWERGRID1_11112026221050_BSENSEReg30LOIdt11112026v3.pdf",
+            "title": "Power Grid Corporation of India Limited",
+            "published_at": "2026-11-11T22:11:00+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "COCHINSHIP",
+        "side": "LONG",
+        "rank": 4,
+        "reason": "The reported naval refit agreement adds contracted work and supports revenue visibility.",
+        "news_summary": "BusinessLine, published November 11, 2026 at 19:16 IST, reported a â‚¹500 crore Defence Ministry agreement with Cochin Shipyard for refit and re-powering of INS Betwa.",
+        "first_available_at": "2026-11-11T19:16:33+05:30",
+        "sources": [
+          {
+            "url": "https://www.thehindubusinessline.com/news/defence-ministry-inks-500-cr-pact-with-cochin-shipyard-for-refit-and-re-powering-of-ins-betwa/article71689933.ece",
+            "title": "Defence Ministry inks â‚¹500-cr pact with Cochin Shipyard for refit and re-powering of INS Betwa",
+            "published_at": "2026-11-11T19:16:33+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "LT",
+        "side": "LONG",
+        "rank": 5,
+        "reason": "The reported metro construction contract adds secured work and supports future revenue visibility.",
+        "news_summary": "Mint, published November 11, 2026 at 21:22 IST, reported that Larsen & Toubro won a â‚¹1,000â€“2,500 crore contract from Noida Metro Rail Corporation covering a 15.1-km elevated viaduct and 10 stations.",
+        "first_available_at": "2026-11-11T21:22:11+05:30",
+        "sources": [
+          {
+            "url": "https://www.livemint.com/companies/news/noida-metro-aqua-line-extension-l-t-secures-order-from-nmrc-to-build-15-1-km-elevated-viaduct-inside-the-contract-11794405082608.html",
+            "title": "Noida Metro Aqua Line Extension: L&T secures order from NMRC to build 15.1-km elevated viaduct â€“ Inside the contract | Company Business News",
+            "published_at": "2026-11-11T21:22:11+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "AUROPHARMA",
+        "side": "SHORT",
+        "rank": 1,
+        "reason": "The reported Official Action Indicated classification creates regulatory and remediation uncertainty for its US subsidiary.",
+        "news_summary": "CNBC-TV18, published November 11, 2026 at 21:42 IST, reported FDA OAI classification following an August 17â€“21 inspection. Aurobindo said it had responded to all four observations within the stipulated time.",
+        "first_available_at": "2026-11-11T21:42:22+05:30",
+        "sources": [
+          {
+            "url": "https://www.cnbctv18.com/market/stocks/aurobindo-pharma-share-price-us-subsidiary-gets-us-fdas-official-action-indicated-classification-20031900.htm",
+            "title": "Aurobindo Pharma's US subsidiary gets US FDA's Official Action Indicated classification - CNBC TV18",
+            "published_at": "2026-11-11T21:42:22+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "PIIND",
+        "side": "SHORT",
+        "rank": 2,
+        "reason": "Expected MSCI removal creates potential selling pressure from funds tracking the index.",
+        "news_summary": "Mint, published November 11, 2026 at 15:49 IST, reported Nuvama's expectation that PI Industries could be removed in the November MSCI reshuffle.",
+        "first_available_at": "2026-11-11T15:49:55+05:30",
+        "sources": [
+          {
+            "url": "https://www.livemint.com/market/stock-market-news/msci-rejig-adani-green-lic-coforge-meesho-shares-set-to-enter-india-standard-index-icici-life-pi-industries-out-11794390119879.html",
+            "title": "MSCI Rejig: Adani Green, LIC, Coforge, Meesho shares set to enter India Standard Index; ICICI Life, PI Industries out?",
+            "published_at": "2026-11-11T15:49:55+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "AEGISLOG",
+        "side": "SHORT",
+        "rank": 3,
+        "reason": "The proposed equity issuance creates a near-term dilution and share-supply overhang.",
+        "news_summary": "CNBC-TV18, published November 12, 2026 at 08:09 IST, reported a â‚¹3,500 crore QIP plan implying approximately 7.1% dilution at the base issue size and indicative price.",
+        "first_available_at": "2026-11-12T08:09:48+05:30",
+        "sources": [
+          {
+            "url": "https://www.cnbctv18.com/market/aegis-logistics-share-price-announces-3500-crore-fundraising-plan-through-qip-20032052.htm",
+            "title": "Aegis Logistics announces â‚¹3,500 crore fundraising plan through QIP; stock in focus - CNBC TV18",
+            "published_at": "2026-11-12T08:09:48+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "EXIDEIND",
+        "side": "SHORT",
+        "rank": 4,
+        "reason": "Reported delays in major automotive orders weaken the near-term lithium-ion investment-payback outlook.",
+        "news_summary": "Mint, published November 12, 2026 at 06:00 IST, reported Exide and Amara Raja pursuing telecom and energy-storage projects for quicker cash flow while sluggish EV adoption and lengthy testing left large automaker orders pending.",
+        "first_available_at": "2026-11-12T06:00:12+05:30",
+        "sources": [
+          {
+            "url": "https://www.livemint.com/companies/news/exide-industries-amara-raja-lithium-ion-cells-11794400315622.html",
+            "title": "Exide, Amara Raja rush to monetize $1 billion Li-ion cell lines as investor questions mount",
+            "published_at": "2026-11-12T06:00:12+05:30"
+          }
+        ]
+      },
+      {
+        "symbol": "ARE&M",
+        "side": "SHORT",
+        "rank": 5,
+        "reason": "Pending automotive orders and the search for alternative customers indicate slower lithium-ion capacity monetisation.",
+        "news_summary": "Mint, published November 12, 2026 at 06:00 IST, described Amara Raja and Exide pursuing telecom and energy-storage projects amid sluggish EV adoption and long customer-testing cycles.",
+        "first_available_at": "2026-11-12T06:00:12+05:30",
+        "sources": [
+          {
+            "url": "https://www.livemint.com/companies/news/exide-industries-amara-raja-lithium-ion-cells-11794400315622.html",
+            "title": "Exide, Amara Raja rush to monetize $1 billion Li-ion cell lines as investor questions mount",
+            "published_at": "2026-11-12T06:00:12+05:30"
+          }
+        ]
+      }
+    ]
+  },
+  "routes": [
+    {
+      "symbol": "AEGISLOG",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 1230.0,
+          "high": 1249.9,
+          "low": 1225.0,
+          "close": 1248.6,
+          "volume": 24250.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 1249.0,
+          "high": 1252.5,
+          "low": 1240.5,
+          "close": 1246.4,
+          "volume": 19437.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 1246.9,
+          "high": 1262.9,
+          "low": 1246.9,
+          "close": 1254.3,
+          "volume": 27888.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 1252.8,
+          "high": 1258.0,
+          "low": 1250.0,
+          "close": 1258.0,
+          "volume": 24994.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 1258.0,
+          "high": 1264.0,
+          "low": 1256.9,
+          "close": 1262.5,
+          "volume": 20779.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 1259.3,
+          "high": 1269.0,
+          "low": 1258.3,
+          "close": 1263.7,
+          "volume": 40214.0
+        }
+      ]
+    },
+    {
+      "symbol": "ARE&M",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 762.0,
+          "high": 763.95,
+          "low": 753.65,
+          "close": 758.75,
+          "volume": 6819.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 758.8,
+          "high": 760.0,
+          "low": 758.25,
+          "close": 759.8,
+          "volume": 2560.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 759.8,
+          "high": 759.8,
+          "low": 757.65,
+          "close": 757.8,
+          "volume": 4352.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 757.9,
+          "high": 759.6,
+          "low": 757.65,
+          "close": 758.4,
+          "volume": 2222.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 758.4,
+          "high": 759.05,
+          "low": 757.65,
+          "close": 758.05,
+          "volume": 1373.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 758.05,
+          "high": 759.65,
+          "low": 757.65,
+          "close": 759.65,
+          "volume": 1470.0
+        }
+      ]
+    },
+    {
+      "symbol": "AUROPHARMA",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 1813.1,
+          "high": 1813.1,
+          "low": 1795.9,
+          "close": 1798.5,
+          "volume": 21925.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 1798.1,
+          "high": 1800.5,
+          "low": 1792.7,
+          "close": 1797.1,
+          "volume": 10367.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 1797.3,
+          "high": 1797.4,
+          "low": 1793.0,
+          "close": 1794.3,
+          "volume": 13294.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 1795.2,
+          "high": 1806.3,
+          "low": 1791.6,
+          "close": 1806.0,
+          "volume": 26600.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 1804.9,
+          "high": 1807.2,
+          "low": 1803.0,
+          "close": 1804.7,
+          "volume": 8977.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 1804.7,
+          "high": 1805.5,
+          "low": 1802.1,
+          "close": 1803.3,
+          "volume": 1957.0
+        }
+      ]
+    },
+    {
+      "symbol": "COCHINSHIP",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 1202.1,
+          "high": 1209.0,
+          "low": 1196.0,
+          "close": 1209.0,
+          "volume": 69958.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 1208.8,
+          "high": 1212.7,
+          "low": 1205.8,
+          "close": 1212.0,
+          "volume": 50840.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 1211.5,
+          "high": 1213.0,
+          "low": 1208.9,
+          "close": 1210.0,
+          "volume": 41322.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 1209.9,
+          "high": 1212.3,
+          "low": 1208.5,
+          "close": 1208.5,
+          "volume": 28644.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 1208.8,
+          "high": 1211.9,
+          "low": 1208.6,
+          "close": 1211.4,
+          "volume": 20567.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 1211.1,
+          "high": 1212.5,
+          "low": 1210.1,
+          "close": 1211.1,
+          "volume": 19465.0
+        }
+      ]
+    },
+    {
+      "symbol": "COFORGE",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 2017.5,
+          "high": 2020.0,
+          "low": 1983.1,
+          "close": 1989.1,
+          "volume": 39224.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 1987.1,
+          "high": 2010.5,
+          "low": 1987.1,
+          "close": 2008.6,
+          "volume": 32441.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 2008.3,
+          "high": 2019.9,
+          "low": 2007.2,
+          "close": 2016.3,
+          "volume": 20687.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 2015.1,
+          "high": 2019.6,
+          "low": 2015.1,
+          "close": 2019.2,
+          "volume": 14431.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 2020.0,
+          "high": 2032.7,
+          "low": 2020.0,
+          "close": 2032.6,
+          "volume": 22853.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 2032.6,
+          "high": 2033.7,
+          "low": 2026.4,
+          "close": 2032.0,
+          "volume": 22361.0
+        }
+      ]
+    },
+    {
+      "symbol": "CUPID",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 360.0,
+          "high": 362.0,
+          "low": 356.0,
+          "close": 359.4,
+          "volume": 794668.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 359.5,
+          "high": 369.7,
+          "low": 358.85,
+          "close": 369.4,
+          "volume": 1123396.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 369.1,
+          "high": 371.0,
+          "low": 365.65,
+          "close": 370.15,
+          "volume": 951253.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 370.3,
+          "high": 374.55,
+          "low": 370.3,
+          "close": 373.2,
+          "volume": 1004722.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 373.2,
+          "high": 380.0,
+          "low": 373.2,
+          "close": 377.3,
+          "volume": 1687347.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 377.7,
+          "high": 381.1,
+          "low": 376.05,
+          "close": 378.65,
+          "volume": 1197323.0
+        }
+      ]
+    },
+    {
+      "symbol": "EXIDEIND",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 384.0,
+          "high": 384.95,
+          "low": 382.4,
+          "close": 383.8,
+          "volume": 7313.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 383.8,
+          "high": 384.6,
+          "low": 383.5,
+          "close": 384.4,
+          "volume": 11358.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 384.2,
+          "high": 385.55,
+          "low": 383.5,
+          "close": 385.0,
+          "volume": 24926.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 385.0,
+          "high": 385.75,
+          "low": 382.65,
+          "close": 382.95,
+          "volume": 28780.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 382.95,
+          "high": 383.75,
+          "low": 382.85,
+          "close": 383.75,
+          "volume": 4790.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 383.8,
+          "high": 384.35,
+          "low": 383.4,
+          "close": 383.5,
+          "volume": 34497.0
+        }
+      ]
+    },
+    {
+      "symbol": "LT",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 4210.0,
+          "high": 4210.0,
+          "low": 4185.2,
+          "close": 4204.1,
+          "volume": 9857.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 4204.3,
+          "high": 4204.7,
+          "low": 4194.4,
+          "close": 4198.7,
+          "volume": 5885.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 4198.7,
+          "high": 4201.0,
+          "low": 4193.1,
+          "close": 4193.1,
+          "volume": 10571.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 4194.8,
+          "high": 4200.0,
+          "low": 4188.3,
+          "close": 4188.3,
+          "volume": 10897.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 4188.6,
+          "high": 4189.5,
+          "low": 4183.5,
+          "close": 4187.1,
+          "volume": 7602.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 4188.0,
+          "high": 4191.8,
+          "low": 4187.0,
+          "close": 4188.9,
+          "volume": 8903.0
+        }
+      ]
+    },
+    {
+      "symbol": "PIIND",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 1744.0,
+          "high": 1759.1,
+          "low": 1744.0,
+          "close": 1758.0,
+          "volume": 6878.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 1757.4,
+          "high": 1761.0,
+          "low": 1748.6,
+          "close": 1754.1,
+          "volume": 10133.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 1753.4,
+          "high": 1755.9,
+          "low": 1751.5,
+          "close": 1753.8,
+          "volume": 3383.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 1752.9,
+          "high": 1754.7,
+          "low": 1752.7,
+          "close": 1754.0,
+          "volume": 4036.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 1755.4,
+          "high": 1762.2,
+          "low": 1754.4,
+          "close": 1760.5,
+          "volume": 7035.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 1760.5,
+          "high": 1762.9,
+          "low": 1756.4,
+          "close": 1756.4,
+          "volume": 4151.0
+        }
+      ]
+    },
+    {
+      "symbol": "POWERGRID",
+      "status": "OK",
+      "returned_count": 253,
+      "candles": [
+        {
+          "timestamp": "2026-11-12T09:15:00+05:30",
+          "epoch": 1794455100.0,
+          "open": 264.05,
+          "high": 264.5,
+          "low": 262.8,
+          "close": 264.15,
+          "volume": 191154.0
+        },
+        {
+          "timestamp": "2026-11-12T09:16:00+05:30",
+          "epoch": 1794455160.0,
+          "open": 264.15,
+          "high": 264.35,
+          "low": 263.5,
+          "close": 264.25,
+          "volume": 109340.0
+        },
+        {
+          "timestamp": "2026-11-12T09:17:00+05:30",
+          "epoch": 1794455220.0,
+          "open": 264.2,
+          "high": 264.4,
+          "low": 263.6,
+          "close": 263.6,
+          "volume": 42464.0
+        },
+        {
+          "timestamp": "2026-11-12T09:18:00+05:30",
+          "epoch": 1794455280.0,
+          "open": 263.6,
+          "high": 264.05,
+          "low": 263.5,
+          "close": 263.85,
+          "volume": 36969.0
+        },
+        {
+          "timestamp": "2026-11-12T09:19:00+05:30",
+          "epoch": 1794455340.0,
+          "open": 263.75,
+          "high": 263.9,
+          "low": 263.35,
+          "close": 263.35,
+          "volume": 67844.0
+        },
+        {
+          "timestamp": "2026-11-12T09:20:00+05:30",
+          "epoch": 1794455400.0,
+          "open": 263.5,
+          "high": 263.65,
+          "low": 262.6,
+          "close": 262.7,
+          "volume": 85605.0
+        }
+      ]
+    }
+  ],
+  "mappings": [
+    {
+      "symbol": "AEGISLOG",
+      "dhan_security_id": "40",
+      "kotak_token": "40",
+      "kotak_trading_symbol": "AEGISLOG-EQ"
+    },
+    {
+      "symbol": "ARE&M",
+      "dhan_security_id": "100",
+      "kotak_token": "100",
+      "kotak_trading_symbol": "ARE&M-EQ"
+    },
+    {
+      "symbol": "AUROPHARMA",
+      "dhan_security_id": "275",
+      "kotak_token": "275",
+      "kotak_trading_symbol": "AUROPHARMA-EQ"
+    },
+    {
+      "symbol": "COCHINSHIP",
+      "dhan_security_id": "21508",
+      "kotak_token": "21508",
+      "kotak_trading_symbol": "COCHINSHIP-EQ"
+    },
+    {
+      "symbol": "COFORGE",
+      "dhan_security_id": "11543",
+      "kotak_token": "11543",
+      "kotak_trading_symbol": "COFORGE-EQ"
+    },
+    {
+      "symbol": "CUPID",
+      "dhan_security_id": "18520",
+      "kotak_token": "18520",
+      "kotak_trading_symbol": "CUPID-EQ"
+    },
+    {
+      "symbol": "EXIDEIND",
+      "dhan_security_id": "676",
+      "kotak_token": "676",
+      "kotak_trading_symbol": "EXIDEIND-EQ"
+    },
+    {
+      "symbol": "LT",
+      "dhan_security_id": "11483",
+      "kotak_token": "11483",
+      "kotak_trading_symbol": "LT-EQ"
+    },
+    {
+      "symbol": "PIIND",
+      "dhan_security_id": "24184",
+      "kotak_token": "24184",
+      "kotak_trading_symbol": "PIIND-EQ"
+    },
+    {
+      "symbol": "POWERGRID",
+      "dhan_security_id": "14977",
+      "kotak_token": "14977",
+      "kotak_trading_symbol": "POWERGRID-EQ"
+    }
+  ],
+  "incorrect_ranges": [
+    {
+      "symbol": "AEGISLOG",
+      "high": "1249.0",
+      "low": "1249.0"
+    },
+    {
+      "symbol": "ARE&M",
+      "high": "760.0",
+      "low": "758.8"
+    },
+    {
+      "symbol": "AUROPHARMA",
+      "high": "1798.1",
+      "low": "1798.1"
+    },
+    {
+      "symbol": "COCHINSHIP",
+      "high": "1208.8",
+      "low": "1208.8"
+    },
+    {
+      "symbol": "COFORGE",
+      "high": "1992.2",
+      "low": "1987.1"
+    },
+    {
+      "symbol": "CUPID",
+      "high": "359.5",
+      "low": "359.5"
+    },
+    {
+      "symbol": "EXIDEIND",
+      "high": "383.8",
+      "low": "383.55"
+    },
+    {
+      "symbol": "LT",
+      "high": "4204.7",
+      "low": "4199.0"
+    },
+    {
+      "symbol": "PIIND",
+      "high": "1757.9",
+      "low": "1757.4"
+    },
+    {
+      "symbol": "POWERGRID",
+      "high": "264.2",
+      "low": "264.15"
+    }
+  ],
+  "bad_entries": [
+    {
+      "symbol": "COFORGE",
+      "side": "BUY",
+      "reference_price": "1993.30000000"
+    },
+    {
+      "symbol": "CUPID",
+      "side": "BUY",
+      "reference_price": "359.90000000"
+    },
+    {
+      "symbol": "AUROPHARMA",
+      "side": "SELL",
+      "reference_price": "1797.00000000"
+    },
+    {
+      "symbol": "ARE&M",
+      "side": "SELL",
+      "reference_price": "758.55000000"
+    },
+    {
+      "symbol": "AEGISLOG",
+      "side": "SELL",
+      "reference_price": "1248.80000000"
+    },
+    {
+      "symbol": "PIIND",
+      "side": "SELL",
+      "reference_price": "1757.20000000"
+    },
+    {
+      "symbol": "COCHINSHIP",
+      "side": "BUY",
+      "reference_price": "1208.90000000"
+    },
+    {
+      "symbol": "POWERGRID",
+      "side": "BUY",
+      "reference_price": "264.30000000"
+    },
+    {
+      "symbol": "EXIDEIND",
+      "side": "SELL",
+      "reference_price": "383.50000000"
+    }
+  ]
+}

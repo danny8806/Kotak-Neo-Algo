@@ -115,7 +115,7 @@ class TickerExchangeTimestampTests(unittest.TestCase):
         runtime=LiveRuntime(session_date=now[0].date(),signals=[{"symbol":"TCS","side":"LONG"}],
             dhan_ids={"TCS":"11536"},kotak_instruments={"TCS":KotakInstrument("TCS","TCS-EQ","11536")},
             opening_ranges={"TCS":(Decimal("100"),Decimal("95"))},
-            policy=LivePolicy(time(9,30),time(15,15),1,1,2,Decimal("10000"),Decimal("20000"),"end"),
+            policy=LivePolicy(time(9,30),time(15,15),1,1,2,Decimal("10000"),Decimal("20000"),"start"),
             ledger=ledger,broker=Mock(),enabled=True,clock=lambda:now[0])
         self.addCleanup(runtime.close)
 

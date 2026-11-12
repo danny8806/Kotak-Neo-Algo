@@ -58,7 +58,7 @@ class SquareOffTests(unittest.TestCase):
                 for i, row in enumerate(initial)
             },
             opening_ranges={row["symbol"]: (100, 90) for row in initial},
-            policy=SimpleNamespace(timestamp_mode="end", entry_cutoff=time(9, 30), exit_time=AT.time()),
+            policy=SimpleNamespace(timestamp_mode="start", entry_cutoff=time(9, 30), exit_time=AT.time()),
             ledger=ledger, broker=broker, enabled=True,
         )
         self.addCleanup(runtime.close)

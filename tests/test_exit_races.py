@@ -49,7 +49,7 @@ class ExitRaceTests(unittest.TestCase):
         r=LiveRuntime(session_date=AT.date(),signals=[{'symbol':'RACE','side':'LONG'}],
             dhan_ids={'RACE':'1'},kotak_instruments={'RACE':KotakInstrument('RACE','RACE-EQ','1')},
             opening_ranges={'RACE':(Decimal('100'),Decimal('99'))},
-            policy=LivePolicy(time(9,30),time(15),5,5,10,Decimal('100000'),Decimal('1000000'),'end',1,1),
+            policy=LivePolicy(time(9,30),time(15),5,5,10,Decimal('100000'),Decimal('1000000'),'start',1,1),
             ledger=ledger,broker=object(),enabled=False,clock=lambda:AT)
         self.addCleanup(r.close);return r
 

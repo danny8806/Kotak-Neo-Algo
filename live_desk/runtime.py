@@ -38,8 +38,10 @@ class LiveRuntime:
             symbols != set(dhan_ids) or symbols != set(kotak_instruments) or
             symbols != set(opening_ranges)):
             raise ValueError("Every signal needs exact Dhan/Kotak mapping and a completed ORB")
-        if not close_only and policy.timestamp_mode not in {"start", "end"}:
-            raise ValueError("Dhan 09:15 timestamp convention is not verified")
+        if not close_only and policy.timestamp_mode != "start":
+            raise ValueError("Entry runtime requires the completed start-labelled 09:15 candle")
+        if not close_only:
+            self._validate_opening_ranges(opening_ranges)
         for symbol, instrument in kotak_instruments.items():
             if (instrument.symbol != symbol or instrument.trading_symbol != f"{symbol}-EQ"
                     or not instrument.token.isdecimal()):
@@ -69,6 +71,13 @@ class LiveRuntime:
         self.reserved_symbols: set[str] = set()
         self.entry_dispatch_ms = deque(maxlen=100)
 
+    @staticmethod
+    def _validate_opening_ranges(opening_ranges):
+        for high, low in opening_ranges.values():
+            high, low = Decimal(str(high)), Decimal(str(low))
+            if not (high.is_finite() and low.is_finite() and high >= low > 0):
+                raise ValueError("Invalid completed opening range")
+
     def extend_signals(self, *, signals: list[dict], dhan_ids: dict[str, str],
                        kotak_instruments: dict[str, KotakInstrument],
                        opening_ranges: dict[str, tuple[Decimal, Decimal]]) -> set[str]:
@@ -78,6 +87,8 @@ class LiveRuntime:
         if (not symbols or symbols != set(dhan_ids) or symbols != set(kotak_instruments)
                 or symbols != set(opening_ranges)):
             raise ValueError("Every added signal needs exact Dhan/Kotak mapping and a completed ORB")
+        if not self.close_only:
+            self._validate_opening_ranges(opening_ranges)
         with self.lock:
             additions = symbols - set(self.signals)
             for symbol in symbols & set(self.signals):

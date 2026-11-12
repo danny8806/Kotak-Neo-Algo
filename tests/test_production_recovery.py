@@ -233,7 +233,7 @@ class ProductionReplayTests(unittest.TestCase):
     def setUp(self):
         self.url,cleanup=create_test_database();self.addCleanup(cleanup)
         self.ledger=LiveLedger(self.url);self.addCleanup(self.ledger.close)
-        self.policy=LivePolicy(time(10),time(15,15),5,5,10,Decimal('100000'),Decimal('1000000'),'end')
+        self.policy=LivePolicy(time(10),time(15,15),5,5,10,Decimal('100000'),Decimal('1000000'),'start')
 
     def runtime(self,broker=None,enabled=True):
         runtime=LiveRuntime(session_date=NOW.date(),signals=[{'symbol':'TESTA','side':'LONG'}],
