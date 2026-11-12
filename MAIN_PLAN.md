@@ -1,6 +1,6 @@
 # Sole production plan: VPS news collection to the dashboard
 
-Updated 11 November 2026. This is the only current architecture and implementation plan. Other historical reports are evidence, not alternative instructions.
+Updated 12 November 2026. This is the only current architecture and implementation plan. Other historical reports are evidence, not alternative instructions.
 
 ## One production path
 
@@ -17,7 +17,7 @@ GitHub stores source and supports explicit code maintenance/deployment. It is no
 | VPS Python collector | Every ten minutes, 24/7, weekends included | Incremental source collection, source-status records, timestamp/issuer parsing, deduplication and durable DB persistence. A single-flight lock prevents overlaps. |
 | Codex FETCH | Eligible half-hour slots, including 08:00 and 08:30, configured maximum 48/day | Pin `gpt-6.1-sol`, medium effort. Independently read/search rotating groups covering every configured source; preserve actual retrieval and source-coverage evidence. Reserve 08:55–09:30 on regular NSE sessions for final work. |
 | OpenCode discovery | Eligible half-hour slots, configured maximum 48/day | Independent discovery using `opencode/deepseek-v4.1-flash-free`, subject to provider quota. Failure must not stop Python. |
-| Decision evidence snapshot | Start of each unpublished 09:00 / 09:05 / 09:10 decision attempt on regular NSE sessions | Include news from the previous regular trading session 15:00 until the actual attempt cutoff, with both source publication and observation before that cutoff. Each attempt is immutable and records its exact cutoff/hash. A retry can include newly collected news; a completed final is never rerun. |
+| Decision evidence snapshot | Start of each unpublished 09:00 / 09:05 / 09:10 decision attempt on regular NSE sessions | Include news from the previous regular trading session 15:00 until the actual attempt cutoff, with both source publication and observation before that cutoff. Each attempt is immutable and records its exact cutoff/hash. A retry can include newly collected news; an accepted completed final is never rerun. If a mechanically invalid report has been rejected before any dashboard acceptance, the same Codex selector may correct that mechanical error before 09:12 using the same frozen news cutoff; preserve the entire rejected report, hash and reason in audit history. |
 | Codex FINAL | 09:00; retry attempts at 09:05 and 09:10 | Pin `gpt-6.1-sol`, high effort. Sole selector from combined source news, no live tools. Target exactly five LONG/BUY and five SHORT/SELL. No extra verification/critic/heuristic selector. Commit before 09:12. |
 | Internal dashboard intake | Every five seconds inside dashboard service | Read today's immutable final report through a SELECT-only news DB account; validate and persist through the shared intake function. No HTTP request. |
 | Executable trading-list lock | 09:15 | Only READY stocks received internally strictly before 09:15 are eligible for that session. Exact Dhan/Kotak mapping and existing entry gates remain mandatory. |
@@ -29,7 +29,7 @@ Final research checks the regular NSE calendar, not weekdays alone. The included
 - Use the source's reported content, real URL and stated publication timestamp directly. One dated source is sufficient. Attribute claims; do not claim independent news verification.
 - Do not add independent corroboration, second-source, official-filing, materiality or counterevidence review gates to stock selection.
 - Never invent stories, sources, timestamps, symbols or picks. Unknown publication time remains unknown and cannot enter the frozen time-limited selection.
-- Keep mechanical source-time, exact symbol/current NIFTY 500 membership, schema, deduplication, direction and daily-limit checks.
+- Keep mechanical source-time, exact symbol/current NIFTY 500 NSE EQ equity membership, schema, deduplication, direction and daily-limit checks. The producer and dashboard must use the same executable EQ/INE universe; other series such as BE must not become executable picks.
 - Codex FINAL must target exactly five LONG/BUY and five SHORT/SELL, selected from news rather than copied recommendations or ready-made stock lists. A READY report requires all ten distinct symbols, five per side, each linked to source news in the strict window. If dated news cannot support ten, record the specific shortage and retry before the deadline; never fabricate stories, timestamps or directions to fill a quota. The published report uses existing schema v1.0 and `execution_enabled=false`.
 - Model auth/quota failure means retry/UNAVAILABLE, not another selecting model or fabricated fallback. Empty/NO_TRADE output must not clear an accumulated dashboard list.
 
