@@ -95,6 +95,24 @@ class PnlSnapshotTests(unittest.TestCase):
         self.assertIsNone(state["last_entry_quote_at"])
         self.assertFalse(state["orb_monitor"]["order_submission_enabled"])
 
+    def test_midday_restart_retains_quotes_for_selected_open_positions(self):
+        from types import SimpleNamespace
+        self.now=self.now.replace(hour=13)
+        desk=self.desk
+        desk.dhan=SimpleNamespace(token='isolated-test-token')
+        desk.dhan_ids={'TESTA':'123'}
+        desk.ticker=None
+        desk.master_fetch=lambda symbols,now:SimpleNamespace(session_date=now.date().isoformat(),security_ids={'TESTA':'123'})
+        class Ticker:
+            def __init__(self,*args):self.started=False
+            def start(self):self.started=True
+            def stop(self):pass
+        desk.ticker_factory=Ticker
+        desk._refresh_position_feed(self.now)
+        self.assertEqual(desk.position_dhan_ids,{'TESTA':'123'})
+        self.assertTrue(desk.position_ticker.started)
+        self.assertEqual(self.broker.order_calls,0)
+
     def test_late_packet_cannot_extend_execution_readiness(self):
         self.desk.dhan_ids={'TESTA':'123','TESTB':'456'}
         newest=self.now-timedelta(seconds=4)

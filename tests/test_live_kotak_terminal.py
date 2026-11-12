@@ -491,7 +491,7 @@ class LiveTerminalTests(unittest.TestCase):
             def get_ohlc(self,securities,exchange_segment="NSE_EQ"):
                 return {}
             def get_intraday(self,security_id,start,end,interval="1"):
-                candle=dt(2026,11,4,9,16,tzinfo=ORB_IST)
+                candle=dt(2026,11,4,9,15,tzinfo=ORB_IST)
                 return {"timestamp":[int(candle.timestamp())],"open":[98],"high":[100],
                     "low":[95],"close":[99],"volume":[100]}
 

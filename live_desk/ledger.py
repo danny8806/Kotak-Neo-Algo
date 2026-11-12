@@ -99,7 +99,8 @@ class LiveLedger:
 
     def reserve_entry(self, *, session_date: date, symbol: str, side: str,
                       quantity: int, reference_price: Decimal, at: datetime,
-                      max_per_side: int, gross_cap: Decimal | None, max_total: int = 20) -> dict | None:
+                      max_per_side: int, gross_cap: Decimal | None, max_total: int = 20,
+                      trigger_context: dict | None = None) -> dict | None:
         if side not in {"BUY", "SELL"} or type(quantity) is not int or quantity <= 0:
             raise ValueError("Invalid entry side or quantity")
         if not symbol or not reference_price.is_finite() or reference_price <= 0:
@@ -108,6 +109,9 @@ class LiveLedger:
             raise ValueError("Entry time must include timezone")
         day = session_date
         notional = reference_price * quantity
+        trigger_json=json.dumps(trigger_context,separators=(',',':'),sort_keys=True) if trigger_context is not None else None
+        if trigger_json is not None and len(trigger_json)>512:
+            raise ValueError('Entry trigger audit exceeds event storage limit')
         if gross_cap is not None and notional > gross_cap:
             return None
         with self.engine.begin() as db:
@@ -124,6 +128,7 @@ class LiveLedger:
                 reserved_notional=notional, state="RESERVED", filled_quantity=0,
                 created_at=stamp, updated_at=stamp))
             self._event(db, tag, "RESERVED", "Entry intent persisted", stamp)
+            if trigger_json is not None:self._event(db,tag,'ORB_TRIGGER',trigger_json,stamp)
             return {"tag": tag, "symbol": symbol, "phase":"ENTRY", "side": side, "quantity": quantity}
 
     def reserve_exit(self, *, session_date: date, symbol: str, at: datetime) -> dict | None:

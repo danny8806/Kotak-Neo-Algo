@@ -167,13 +167,16 @@ class LiveRuntime:
             direction = "BUY" if side == "LONG" else "SELL"
             started=received_ns if received_ns is not None else wall_time.perf_counter_ns()
             future = self.submissions.submit(
-                self._reserve_and_submit,symbol,direction,quantity,price,at,started,feed_generation)
+                self._reserve_and_submit,symbol,direction,quantity,price,at,started,feed_generation,
+                {'previous_price':str(previous),'previous_at':prior_time.isoformat(),
+                 'trigger_price':str(price),'trigger_at':at.isoformat(),
+                 'orb_high':str(high),'orb_low':str(low),'feed_generation':feed_generation})
             self.pending_entries.add(symbol)
             self.pending.add(future)
             future.add_done_callback(lambda done: self._submission_done(done, symbol))
             return {"symbol": symbol, "state": "SUBMISSION_QUEUED"}
 
-    def _reserve_and_submit(self, symbol, direction, quantity, price, at, received_ns, feed_generation):
+    def _reserve_and_submit(self, symbol, direction, quantity, price, at, received_ns, feed_generation,trigger_context=None):
         if not self._entry_may_send(at,feed_generation):
             return
         # PostgreSQL still owns deduplication and every exposure limit.
@@ -182,7 +185,7 @@ class LiveRuntime:
             quantity=quantity, reference_price=price, at=at,
             max_per_side=self.policy.max_long if direction == "BUY" else self.policy.max_short,
             gross_cap=self.policy.gross_cap if self.policy.enforce_capital_limits else None,
-            max_total=self.policy.max_positions)
+            max_total=self.policy.max_positions,trigger_context=trigger_context)
         if intent:
             with self.lock:self.reserved_symbols.add(symbol)
             self._submit_and_reconcile(intent,at,received_ns=received_ns,feed_generation=feed_generation)

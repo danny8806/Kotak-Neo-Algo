@@ -573,7 +573,7 @@ class ProductionReplayTests(unittest.TestCase):
             def get_intraday(self, security_id, start, end, *, interval):
                 candles.append((security_id, start, end, interval))
                 history_wave.wait(timeout=3)
-                return {"timestamp": [int(NOW.replace(minute=16).timestamp())],
+                return {"timestamp": [int(NOW.replace(minute=15).timestamp())],
                         "open": [98], "high": [100], "low": [95], "close": [99]}
             def get_ohlc(self,*args,**kwargs):return {}
         class Auth:
@@ -635,7 +635,7 @@ class ProductionReplayTests(unittest.TestCase):
             self.assertEqual(master_reads,["nse_cm"])
             master_download.assert_called_once()
             self.assertEqual(set(candles), {
-                (d, NOW.replace(minute=15), NOW.replace(minute=17), "1") for d in ids.values()
+                (d, NOW.replace(minute=14), NOW.replace(minute=17), "1") for d in ids.values()
             })
             self.assertEqual(desk.opening_ranges, {s: (Decimal(100), Decimal(95)) for s in ids})
             self.assertEqual(client.post('/api/auth/login',json={'password':password}).status_code,200)

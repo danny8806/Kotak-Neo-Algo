@@ -444,11 +444,11 @@ class LiveSupervisor:
         if now.time()<START:
             self.status="WARMING_DHAN_FEED"
             return
-        if self.policy.timestamp_mode not in {"start","end"}:
-            raise RuntimeError("Dhan 09:15 candle timestamp mode not yet verified")
+        if self.policy.timestamp_mode != "start":
+            raise RuntimeError("Dhan opening range requires the completed start-labelled 09:15 candle")
 
         jobs={self.preparation.submit(opening_range,self.dhan,security_id,now.date(),
-                                      timestamp_mode=self.policy.timestamp_mode):symbol
+                                      timestamp_mode=self.policy.timestamp_mode,clock=self.clock):symbol
               for symbol,security_id in self.dhan_ids.items() if symbol not in self.opening_ranges}
         for job in as_completed(jobs):
             symbol=jobs[job]
@@ -564,7 +564,9 @@ class LiveSupervisor:
     def _refresh_position_feed(self,now):
         """Read-only ticks for account positions outside the signal watchlist."""
         symbols={row["symbol"] for row in self.broker_positions if row["net_quantity"]}
-        symbols-=set(self.dhan_ids)
+        # An existing entry subscription covers these prices. After a restart
+        # outside the entry window it may not exist, so value all open positions.
+        if self.ticker is not None:symbols-=set(self.dhan_ids)
         if not time(9,15)<=now.time()<time(15,30) or not is_regular_session(now.date()):symbols=set()
         if not symbols:
             if self.position_ticker:self.position_ticker.stop()

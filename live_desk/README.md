@@ -95,9 +95,12 @@ across workers. The exit setting may be earlier than 15:00 but cannot be later.
 Legacy settings above 15:00 are capped at startup. Broker funds are informational;
 no local available-cash/minimum-capital/gross-notional gate blocks either sizing mode.
 
-The policy sets `dhan_candle_timestamp_mode` to `end`, verified against returned
-Dhan 09:15 one-minute candle timestamps on 2026-11-05. Recheck it if Dhan changes
-its chart timestamp convention. Dhan access tokens are generated on startup and
+The policy requires `dhan_candle_timestamp_mode` to be `start`. The opening range
+uses only the completed bar timestamped 09:15 IST, fetched with a 09:14 request
+buffer. The 12 November raw-data audit corrected an earlier mistaken end-label
+assumption that selected the forming 09:16 bar. The candle OHLC is saved under
+`LIVE_ORB_AUDIT_DIR`; each order intent also records its actual previous/current
+tick pair and range in an `ORB_TRIGGER` event. Dhan access tokens are generated on startup and
 refreshed daily before expiry. India VIX is fetched read-only from the configured
 Dhan `IDX_I` security ID and shown as context; it never triggers an entry. Compose
 defaults `LIVE_ORDERS_ALLOWED` to `NO`; the service starts disarmed after every

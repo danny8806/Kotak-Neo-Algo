@@ -10,5 +10,5 @@
   "allocation_per_position_inr": 100000,
   "gross_cap_inr": 1000000,
   "stop_loss": null,
-  "dhan_candle_timestamp_mode": "end"
+  "dhan_candle_timestamp_mode": "start"
 }

@@ -16,7 +16,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 class LiveBoundaryTests(unittest.TestCase):
     def test_dhan_opening_range_requires_audited_timestamp_mode(self):
-        epoch = int(datetime(2026, 11, 5, 9, 16, tzinfo=IST).timestamp())
+        epoch = int(datetime(2026, 11, 5, 9, 15, tzinfo=IST).timestamp())
         data = {"timestamp": [epoch], "open": [100], "high": [102], "low": [99],
                 "close": [101], "volume": [1000]}
         class Dhan:
@@ -24,7 +24,7 @@ class LiveBoundaryTests(unittest.TestCase):
                 return data
         with self.assertRaises(ValueError):
             opening_range(Dhan(), "123", date(2026, 11, 5), timestamp_mode="unknown")
-        high, low = opening_range(Dhan(), "123", date(2026, 11, 5), timestamp_mode="end")
+        high, low = opening_range(Dhan(), "123", date(2026, 11, 5), timestamp_mode="start")
         self.assertEqual((high, low), (Decimal("102"), Decimal("99")))
         policy = LivePolicy(time(10), time(15, 15), 5, 5, 10,
                             Decimal("100000"), Decimal("1000000"), "end")

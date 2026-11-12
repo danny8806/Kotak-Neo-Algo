@@ -1,0 +1,172 @@
+[
+  {
+    "symbol": "AEGISLOG",
+    "side": "SHORT",
+    "first_OHLC": {
+      "open": 1230.0,
+      "high": 1249.9,
+      "low": 1225.0,
+      "close": 1248.6
+    },
+    "second_OHLC": {
+      "open": 1249.0,
+      "high": 1252.5,
+      "low": 1240.5,
+      "close": 1246.4
+    },
+    "trigger_price": "1248.80000000"
+  },
+  {
+    "symbol": "ARE&M",
+    "side": "SHORT",
+    "first_OHLC": {
+      "open": 762.0,
+      "high": 763.95,
+      "low": 753.65,
+      "close": 758.75
+    },
+    "second_OHLC": {
+      "open": 758.8,
+      "high": 760.0,
+      "low": 758.25,
+      "close": 759.8
+    },
+    "trigger_price": "758.55000000"
+  },
+  {
+    "symbol": "AUROPHARMA",
+    "side": "SHORT",
+    "first_OHLC": {
+      "open": 1813.1,
+      "high": 1813.1,
+      "low": 1795.9,
+      "close": 1798.5
+    },
+    "second_OHLC": {
+      "open": 1798.1,
+      "high": 1800.5,
+      "low": 1792.7,
+      "close": 1797.1
+    },
+    "trigger_price": "1797.00000000"
+  },
+  {
+    "symbol": "COCHINSHIP",
+    "side": "LONG",
+    "first_OHLC": {
+      "open": 1202.1,
+      "high": 1209.0,
+      "low": 1196.0,
+      "close": 1209.0
+    },
+    "second_OHLC": {
+      "open": 1208.8,
+      "high": 1212.7,
+      "low": 1205.8,
+      "close": 1212.0
+    },
+    "trigger_price": "1208.90000000"
+  },
+  {
+    "symbol": "COFORGE",
+    "side": "LONG",
+    "first_OHLC": {
+      "open": 2017.5,
+      "high": 2020.0,
+      "low": 1983.1,
+      "close": 1989.1
+    },
+    "second_OHLC": {
+      "open": 1987.1,
+      "high": 2010.5,
+      "low": 1987.1,
+      "close": 2008.6
+    },
+    "trigger_price": "1993.30000000"
+  },
+  {
+    "symbol": "CUPID",
+    "side": "LONG",
+    "first_OHLC": {
+      "open": 360.0,
+      "high": 362.0,
+      "low": 356.0,
+      "close": 359.4
+    },
+    "second_OHLC": {
+      "open": 359.5,
+      "high": 369.7,
+      "low": 358.85,
+      "close": 369.4
+    },
+    "trigger_price": "359.90000000"
+  },
+  {
+    "symbol": "EXIDEIND",
+    "side": "SHORT",
+    "first_OHLC": {
+      "open": 384.0,
+      "high": 384.95,
+      "low": 382.4,
+      "close": 383.8
+    },
+    "second_OHLC": {
+      "open": 383.8,
+      "high": 384.6,
+      "low": 383.5,
+      "close": 384.4
+    },
+    "trigger_price": "383.50000000"
+  },
+  {
+    "symbol": "LT",
+    "side": "LONG",
+    "first_OHLC": {
+      "open": 4210.0,
+      "high": 4210.0,
+      "low": 4185.2,
+      "close": 4204.1
+    },
+    "second_OHLC": {
+      "open": 4204.3,
+      "high": 4204.7,
+      "low": 4194.4,
+      "close": 4198.7
+    },
+    "trigger_price": null
+  },
+  {
+    "symbol": "PIIND",
+    "side": "SHORT",
+    "first_OHLC": {
+      "open": 1744.0,
+      "high": 1759.1,
+      "low": 1744.0,
+      "close": 1758.0
+    },
+    "second_OHLC": {
+      "open": 1757.4,
+      "high": 1761.0,
+      "low": 1748.6,
+      "close": 1754.1
+    },
+    "trigger_price": "1757.20000000"
+  },
+  {
+    "symbol": "POWERGRID",
+    "side": "LONG",
+    "first_OHLC": {
+      "open": 264.05,
+      "high": 264.5,
+      "low": 262.8,
+      "close": 264.15
+    },
+    "second_OHLC": {
+      "open": 264.15,
+      "high": 264.35,
+      "low": 263.5,
+      "close": 264.25
+    },
+    "trigger_price": "264.30000000"
+  }
+]
