@@ -17,6 +17,9 @@ read-only; Kotak mapping, order readiness and live order submission stay blocked
    through 08:55, then every minute through 09:11 with a hard 09:12 stop. It writes
    one immutable `news_morning_reports` row
    tagged `pipeline_version=vps-codex-final-v1`.
+   If no READY list exists by 09:00, retries use only Codex's previously saved
+   independent-source/news-search records, with no fresh fetch or other agents'
+   news. Both publication and observation stay inside the strict attempt window.
 2. `live_desk/news_intake.py` runs inside the dashboard process and reads that row
    with a SELECT-only news database account over the Docker private network. It
    makes no HTTP request and holds no write grant on the news database.
