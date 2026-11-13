@@ -6,7 +6,7 @@ import json
 import threading
 from sqlalchemy import create_engine, text
 from bridge.app import IST, ingest_report
-from live_desk.research_contract import FINAL_CUTOFF, FINAL_DEADLINE, PIPELINE_VERSION
+from live_desk.research_contract import FINAL_START, FINAL_CUTOFF, FINAL_DEADLINE, PIPELINE_VERSION
 
 class InternalNewsIntake:
     def __init__(self, news_engine, signal_engine, *, allowed_symbols, clock=None):
@@ -52,6 +52,7 @@ class InternalNewsIntake:
             return self._record(status='FINAL_WINDOW_REJECTED', session_date=day,
                                 reason='missing or invalid final timestamps')
         if (cutoff.date().isoformat() != day or generated.date().isoformat() != day
+                or cutoff.timetz().replace(tzinfo=None) < FINAL_START
                 or cutoff.timetz().replace(tzinfo=None) >= FINAL_CUTOFF
                 or generated.timetz().replace(tzinfo=None) >= FINAL_DEADLINE
                 or generated < cutoff):

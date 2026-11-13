@@ -77,9 +77,9 @@ def validate(data, *, allow_sample=False, expected_date=None, allowed_symbols=No
     require(generated.date() == day,
             'Report must be generated on the session date')
     if strict_final:
-        # The daily VPS FINAL producer freezes evidence at 09:00 and must commit
+        # The daily VPS FINAL producer starts actual-cutoff attempts at 08:00 and must commit
         # before 09:12. Dates/times are already normalised to IST.
-        require(dtime(9,0) <= cutoff.timetz().replace(tzinfo=None) < dtime(9,12),
+        require(dtime(8,0) <= cutoff.timetz().replace(tzinfo=None) < dtime(9,12),
                 'Final research cutoff must be the actual morning decision-attempt time before 09:12 IST')
         require(generated.timetz().replace(tzinfo=None) < dtime(9, 12),
                 'Final report must be generated strictly before 09:12 IST')

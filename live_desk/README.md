@@ -12,8 +12,10 @@ read-only; Kotak mapping, order readiness and live order submission stay blocked
 ## Internal daily path
 
 1. The VPS collector writes source records to the private news database every ten
-   minutes, 24/7. The Codex FINAL job runs at 09:00 with retries at 09:05 and 09:10
-   on regular NSE sessions and writes one immutable `news_morning_reports` row
+   minutes, 24/7. Codex FINAL starts at 08:00 IST on regular NSE sessions, targets
+   an accepted list by 09:00, and retries unfinished attempts every five minutes
+   through 08:55, then every minute through 09:11 with a hard 09:12 stop. It writes
+   one immutable `news_morning_reports` row
    tagged `pipeline_version=vps-codex-final-v1`.
 2. `live_desk/news_intake.py` runs inside the dashboard process and reads that row
    with a SELECT-only news database account over the Docker private network. It
