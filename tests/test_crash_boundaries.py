@@ -1,5 +1,6 @@
 """Crash checkpoints use isolated PostgreSQL and broker stubs, never live orders."""
 import unittest
+import os,sys,subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
@@ -14,6 +15,39 @@ class CrashBoundaryTests(unittest.TestCase):
     setUp=fixtures.ExitRaceTests.setUp
     report=fixtures.ExitRaceTests.report
     runtime=fixtures.ExitRaceTests.runtime
+
+    def kill_worker_at_checkpoint(self, uncertain):
+        code="""import os,signal
+from datetime import datetime
+from live_desk.dhan_data import IST
+from live_desk.ledger import LiveLedger
+at=datetime(2026,11,11,15,0,tzinfo=IST)
+ledger=LiveLedger(os.environ['CRASH_TEST_DATABASE_URL'])
+intent=ledger.reserve_exit(session_date=at.date(),symbol='RACE',at=at)
+if os.environ['CRASH_AFTER_CLAIM']=='YES':ledger.mark_submission_unknown(intent['tag'],at)
+os.kill(os.getpid(),signal.SIGKILL)
+"""
+        result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'CRASH_TEST_DATABASE_URL':self.url,'CRASH_AFTER_CLAIM':'YES' if uncertain else 'NO'},capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,-9,'Fault-injection worker must be killed after its committed checkpoint')
+
+    @unittest.skipIf(sys.platform=='win32','POSIX process-kill integration test')
+    def test_actual_killed_process_recovers_committed_unsent_exit(self):
+        self.kill_worker_at_checkpoint(False)
+        runtime=self.runtime(self.ledgers[1]);calls=[]
+        def send(*args,**kwargs):calls.append(args[4]);return {'broker_order_id':'ISOLATED-EXIT'}
+        with patch('live_desk.runtime.place_kotak_order',side_effect=send),patch('live_desk.runtime.reconcile_kotak_tag',side_effect=lambda broker,tag:self.report(tag)):
+            runtime.exit_due(AT,read_positions=lambda:[{'symbol':'RACE','product':'MIS','net_quantity':1}]);runtime.wait_for_submissions()
+        self.assertEqual(len(calls),1)
+        self.assertEqual(next(r for r in self.ledgers[0].snapshot(AT.date()) if r['phase']=='EXIT')['state'],'FILLED')
+
+    @unittest.skipIf(sys.platform=='win32','POSIX process-kill integration test')
+    def test_actual_killed_process_after_claim_never_replays_unknown_exit(self):
+        self.kill_worker_at_checkpoint(True)
+        runtime=self.runtime(self.ledgers[1])
+        with patch('live_desk.runtime.place_kotak_order') as send,patch('live_desk.runtime.reconcile_kotak_tag',side_effect=RuntimeError('Broker outcome not visible')):
+            runtime.exit_due(AT,read_positions=lambda:[{'symbol':'RACE','product':'MIS','net_quantity':1}])
+        send.assert_not_called()
+        self.assertEqual(next(r for r in self.ledgers[0].snapshot(AT.date()) if r['phase']=='EXIT')['state'],'SUBMISSION_UNKNOWN')
 
     def test_restart_recovers_exit_reserved_before_process_crashed(self):
         intent=self.ledgers[0].reserve_exit(session_date=AT.date(),symbol='RACE',at=AT)
