@@ -233,7 +233,10 @@ class LiveRuntime:
             self.ledger.mark_not_submitted(tag, self.clock())
             return {"tag": tag, "state": "ABORTED"}
         # Persist before network I/O, without holding the tick reader's lock.
-        self.ledger.mark_submission_unknown(tag, self.clock())
+        if is_entry:
+            self.ledger.mark_submission_unknown(tag, self.clock())
+        elif not self.ledger.claim_reserved_exit(tag,self.clock()):
+            return {'tag':tag,'state':'ALREADY_CLAIMED'}
         if is_entry and not self._entry_may_send(at,feed_generation):
             self.ledger.mark_not_submitted(tag, self.clock(), committed_for_send=True)
             return {"tag": tag, "state": "ABORTED"}
@@ -333,7 +336,13 @@ class LiveRuntime:
             if prior:
                 if prior["state"] in {"REJECTED", "PARTIAL_CANCELLED"} and prior["filled_quantity"] < entry["filled_quantity"]:
                     self._error(f"EOD:{symbol}", f"{symbol}: exit ended with shares remaining. Manual action required.")
-                continue
+                if prior['state']!='RESERVED':
+                    continue
+                if (prior['quantity']!=entry['filled_quantity']
+                        or prior['side']!=('SELL' if entry['side']=='BUY' else 'BUY') or prior.get('broker_order_id')
+                        or prior['filled_quantity']):
+                    self._error(f'EOD:{symbol}',f'{symbol}: reserved exit conflicts with confirmed fills. Manual action required.')
+                    continue
             if entry["filled_quantity"] > 0 and symbol in self.signals:
                 candidates.append(entry)
         # Read positions after cancellations so late entry fills are included.
@@ -342,6 +351,10 @@ class LiveRuntime:
         with self.lock:
             for entry in candidates:
                 symbol = entry["symbol"]
+                prior=exits.get(symbol)
+                if prior and positions is None:
+                    self._error(f'EOD:{symbol}',f'{symbol}: reserved exit recovery requires fresh broker positions.')
+                    continue
                 if positions is not None:
                     matches = [row for row in positions if row["symbol"] == symbol and row["product"] == "MIS"]
                     expected = entry["filled_quantity"] if entry["side"] == "BUY" else -entry["filled_quantity"]
@@ -349,7 +362,8 @@ class LiveRuntime:
                         self._error(f"EOD:{symbol}", f"{symbol}: Kotak MIS quantity does not match bot fills. Manual action required.")
                         continue
                     self._clear_error(f"EOD:{symbol}")
-                intent = self.ledger.reserve_exit(session_date=self.session_date, symbol=symbol, at=at)
+                intent = ({'tag':prior['tag'],'symbol':symbol,'phase':'EXIT','side':prior['side'],'quantity':prior['quantity']}
+                          if prior else self.ledger.reserve_exit(session_date=self.session_date, symbol=symbol, at=at))
                 if intent:
                     future = self.submissions.submit(self._submit_and_reconcile, intent, at)
                     self.pending.add(future)
@@ -374,6 +388,7 @@ class LiveRuntime:
         if local.date() != self.session_date or local.time() < self.policy.entry_cutoff:
             return
         self.enabled = False
+        self.ledger.abort_unsent_entries(self.session_date,at)
         # A durable transition prevents a second cancellation after a timeout.
         working_entries = [
             row for row in self.ledger.snapshot(self.session_date)

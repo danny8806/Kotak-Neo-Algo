@@ -163,6 +163,32 @@ class LiveLedger:
                 state="SUBMISSION_UNKNOWN", updated_at=stamp))
             self._event(db, tag, "SUBMISSION_UNKNOWN", "Broker call may have reached Kotak", stamp)
 
+    def claim_reserved_exit(self, tag: str, at: datetime) -> bool:
+        """Claim an exit for its first dispatch; concurrent recovery loses cleanly."""
+        with self.engine.begin() as db:
+            row=db.execute(select(intents).where(intents.c.tag==tag).with_for_update()).mappings().first()
+            if (not row or row['phase']!='EXIT' or row['state']!='RESERVED'
+                    or row['broker_order_id'] or row['filled_quantity']):
+                return False
+            db.execute(update(intents).where(intents.c.tag==tag).values(state='SUBMISSION_UNKNOWN',updated_at=at))
+            self._event(db,tag,'SUBMISSION_UNKNOWN','Exit claimed before its first broker dispatch',at)
+            return True
+
+    def abort_unsent_entries(self, session_date: date, at: datetime, *, prior_only: bool = False) -> int:
+        """After cutoff, release only entries that provably never reached dispatch."""
+        count=0
+        with self.engine.begin() as db:
+            day_filter=(intents.c.session_date<session_date if prior_only else intents.c.session_date==session_date)
+            rows=db.execute(select(intents).where(day_filter,
+                intents.c.phase=='ENTRY',intents.c.state=='RESERVED').order_by(intents.c.id).with_for_update()).mappings().all()
+            for row in rows:
+                if row['broker_order_id'] or row['filled_quantity']:
+                    continue
+                db.execute(update(intents).where(intents.c.tag==row['tag']).values(state='ABORTED',updated_at=at))
+                self._event(db,row['tag'],'ABORTED','Cutoff passed before any entry dispatch',at)
+                count+=1
+        return count
+
     def mark_cancel_pending(self, tag: str, at: datetime) -> None:
         with self.lock, self.engine.begin() as db:
             row = db.execute(select(intents.c.phase, intents.c.state).where(
@@ -178,6 +204,8 @@ class LiveLedger:
         """An entry lost authorization/freshness while queued; no broker call was made."""
         with self.lock, self.engine.begin() as db:
             row=db.execute(select(intents.c.state).where(intents.c.tag==tag).with_for_update()).first()
+            if row and row.state=='ABORTED':
+                return
             expected = "SUBMISSION_UNKNOWN" if committed_for_send else "RESERVED"
             if not row or row.state != expected:
                 raise ValueError("Only an unsent reservation can be aborted")

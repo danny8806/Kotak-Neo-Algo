@@ -16,6 +16,7 @@ services:
       timeout: 3s
       retries: 12
   kotak-live-news:
+    image: kotak-news-live:reserved-recovery-20261113
     build:
       context: ..
       dockerfile: live_desk/Dockerfile

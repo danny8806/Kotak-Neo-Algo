@@ -541,6 +541,7 @@ class LiveSupervisor:
         orders=broker_view.orders(self.broker,rows=order_rows)
         fills=broker_view.fills(self.broker,rows=trade_rows)
         self.ledger.record_broker_fills(fills,now)
+        self.ledger.abort_unsent_entries(now.date(),now,prior_only=True)
         prior_recovery=self.ledger.prior_session_recovery_count(now.date())
         now=self.now()
         if self.runtime:
@@ -779,6 +780,7 @@ class LiveSupervisor:
         """
         if not self.allowed or now.time()<self.policy.entry_cutoff or not is_regular_session(now.date()):
             return
+        self.ledger.abort_unsent_entries(now.date(),now)
         square_off=now.time()>=self.policy.exit_time
         if self.armed:
             self.disarm("End-of-day square-off started" if square_off else "Entry cutoff reached")
